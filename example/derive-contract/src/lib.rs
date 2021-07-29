@@ -1,9 +1,12 @@
+use std::vec;
+
 use scrt_derive_contract::{init, handle, query, contract};
 use fadroma::scrt::{
     addr::Canonize,
+    cosmwasm_std,
     cosmwasm_std::{
         HumanAddr, StdResult, Extern, Storage, Api, Querier,
-        InitResponse, HandleResponse, QueryResult, StdError
+        InitResponse, HandleResponse, StdError
     },
     storage::{load, ns_load, ns_save, save}};
 use serde::{Serialize, Deserialize};
@@ -46,7 +49,7 @@ pub trait Votes {
     #[query]
     fn status() -> StdResult<Response> {
         let votes = load_votes(&deps.storage)?;
-
+        
         Ok(Response {
             votes
         })
