@@ -5,10 +5,11 @@ use fadroma::scrt::{
     addr::Canonize,
     cosmwasm_std,
     cosmwasm_std::{
-        HumanAddr, StdResult, Extern, Storage, Api, Querier,
-        InitResponse, HandleResponse, StdError
+        Api, Extern, HandleResponse, HumanAddr, InitResponse,
+        Querier, StdError, StdResult, Storage
     },
-    storage::{load, ns_load, ns_save, save}};
+    storage::{load, ns_load, ns_save, save}
+};
 use serde::{Serialize, Deserialize};
 use schemars::JsonSchema;
 
@@ -28,7 +29,7 @@ pub trait Votes {
     #[handle]
     fn vote(option: String) -> StdResult<HandleResponse> {
         if has_voted(&deps, &env.message.sender)? {
-            return Err(StdError::generic_err("Already voted."))
+            return Err(StdError::generic_err("Already voted"))
         }
 
         let mut votes = load_votes(&deps.storage)?;
@@ -40,7 +41,7 @@ pub trait Votes {
 
             save_voter_addr(deps, &env.message.sender)?;
         } else {
-            return Err(StdError::generic_err(format!("Unknown vote option: {}", option)));
+            return Err(StdError::generic_err("Option not found"));
         }
 
         Ok(HandleResponse::default())
@@ -49,7 +50,7 @@ pub trait Votes {
     #[query]
     fn status() -> StdResult<Response> {
         let votes = load_votes(&deps.storage)?;
-        
+
         Ok(Response {
             votes
         })
@@ -61,7 +62,7 @@ pub struct Response {
     votes: Vec<VoteOption>
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
 pub struct VoteOption {
     pub description: String,
     pub votes: u32
@@ -77,7 +78,9 @@ impl VoteOption {
 }
 
 fn load_votes(storage: &impl Storage) -> StdResult<Vec<VoteOption>> {
-    load(storage, KEY_VOTES)?.unwrap()
+    let votes: Option<Vec<VoteOption>> = load(storage, KEY_VOTES)?;
+    
+    Ok(votes.unwrap())
 }
 
 fn save_votes(storage: &mut impl Storage, votes: &Vec<VoteOption>) -> StdResult<()> {
@@ -102,11 +105,11 @@ fn has_voted<S: Storage, A: Api, Q: Querier>(
     
     Ok(result.is_some())
 }
-/*
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use fadroma::scrt::cosmwasm_std::{Extern};
+    use fadroma::scrt::cosmwasm_std::Extern;
     use fadroma::scrt::cosmwasm_std::from_binary;
     use fadroma::scrt::cosmwasm_std::testing::{mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage};
 
@@ -116,19 +119,20 @@ mod test {
         option1: u32,
         option2: u32,
     ) {
-        let compare_votes: Vec<(String, u32)> = vec![
-            ("option1".to_string(), option1),
-            ("option2".to_string(), option2),
-        ];
-
-        let query_response = query(deps, msg::Query::Status {}).expect("Querying went wrong");
-        let res = from_binary::<msg::Response>(&query_response)
-            .expect("Converting query response from binary went wrong");
-        match res {
-            msg::Response::Results { votes } => {
-                assert_eq!(votes, compare_votes);
+        let compare_votes = vec![
+            VoteOption {
+                description: "option1".to_string(),
+                votes: option1
+            },
+            VoteOption {
+                description: "option2".to_string(),
+                votes: option2
             }
-        };
+        ];
+        let query_response = query(deps, QueryMsg::Status {}).unwrap();
+        let res: Response = from_binary(&query_response).unwrap();
+
+        assert_eq!(res.votes, compare_votes);
     }
 
     #[test]
@@ -141,7 +145,7 @@ mod test {
         let res = init(
             &mut deps,
             env,
-            Init {
+            InitMsg {
                 options: vec![String::from("option1"), String::from("option2")],
             },
         );
@@ -154,16 +158,14 @@ mod test {
 
         let mut env = mock_env("voter", &[]);
         env.block.height = 876;
-        let handle_res = handle(
+
+        handle(
             &mut deps,
             env,
-            msg::TX::Vote {
+            HandleMsg::Vote {
                 option: "option1".to_string(),
             },
-        );
-
-        // assert voting went ok
-        assert!(handle_res.is_ok());
+        ).unwrap();
 
         // assert vote has been recorded properly
         assert_query_ok(&mut deps, 1, 0);
@@ -173,7 +175,7 @@ mod test {
         let handle_res = handle(
             &mut deps,
             env,
-            msg::TX::Vote {
+            HandleMsg::Vote {
                 option: "option1".to_string(),
             },
         );
@@ -192,7 +194,7 @@ mod test {
         let handle_res = handle(
             &mut deps,
             env,
-            msg::TX::Vote {
+            HandleMsg::Vote {
                 option: "option3".to_string(),
             },
         );
@@ -208,17 +210,15 @@ mod test {
 
         let mut env = mock_env("voter1", &[]);
         env.block.height = 876;
-        let handle_res = handle(
+        handle(
             &mut deps,
             env,
-            msg::TX::Vote {
+            HandleMsg::Vote {
                 option: "option2".to_string(),
             },
-        );
+        ).unwrap();
 
         // assert voting went okay, and the proper votes are recorded
-        assert!(handle_res.is_ok());
         assert_query_ok(&mut deps, 1, 1);
     }
 }
-*/

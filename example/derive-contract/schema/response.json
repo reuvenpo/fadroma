@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Response",
+  "type": "object",
+  "required": [
+    "votes"
+  ],
+  "properties": {
+    "votes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/VoteOption"
+      }
+    }
+  },
+  "definitions": {
+    "VoteOption": {
+      "type": "object",
+      "required": [
+        "description",
+        "votes"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "votes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}

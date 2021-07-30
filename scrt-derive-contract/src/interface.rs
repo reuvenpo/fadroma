@@ -2,7 +2,8 @@ use syn::{
     TraitItemMethod, Path, NestedMeta, AttributeArgs, ItemTrait,
     Meta, TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
     Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
-    ItemStruct, parse_quote
+    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField, ExprCall,
+    parse_quote
 };
 use syn::token::{Comma, Brace, Colon};
 use syn::punctuated::Punctuated;
@@ -17,11 +18,30 @@ macro_rules! default_impl_ident {
     };
 }
 
+const INIT_MSG: &str = "InitMsg";
+const HANDLE_MSG: &str = "HandleMsg";
+const QUERY_MSG: &str = "QueryMsg";
+
 pub struct ContractInterface {
     ident: Ident,
     init: TraitItemMethod,
     handle: Vec<TraitItemMethod>,
     query: Vec<TraitItemMethod>
+}
+
+#[derive(Clone)]
+enum MsgType {
+    Handle,
+    Query
+}
+
+impl MsgType {
+    pub fn to_ident(self) -> Ident {
+        match self {
+            Self::Handle => Ident::new(HANDLE_MSG, Span::call_site()),
+            Self::Query => Ident::new(QUERY_MSG, Span::call_site())
+        }
+    }
 }
 
 impl ContractInterface {
@@ -85,14 +105,21 @@ impl ContractInterface {
         let struct_impl = self.generate_default_impl();
 
         let init_msg = self.generate_init_msg();
-        let handle_msg = self.generate_messages("HandleMsg", &self.handle);
-        let query_msg = self.generate_messages("QueryMsg", &self.query);
+        let handle_msg = self.generate_messages(MsgType::Handle);
+        let query_msg = self.generate_messages(MsgType::Query);
+
+        let init = self.generate_init_fn();
+        let handle = self.generate_handle_fn();
+        let query = self.generate_query_fn();
 
         quote! {
             #struct_impl
             #init_msg
             #handle_msg
             #query_msg
+            #init
+            #handle
+            #query
         }
     }
 
@@ -107,8 +134,13 @@ impl ContractInterface {
         }
     }
 
-    fn generate_messages(&self, enum_name: &str, methods: &Vec<TraitItemMethod>) -> ItemEnum {
-        let enum_name = Ident::new(enum_name, Span::call_site());
+    fn generate_messages(&self, msg_type: MsgType) -> ItemEnum {
+        let methods = match msg_type {
+            MsgType::Handle => &self.handle,
+            MsgType::Query => &self.query
+        };
+
+        let enum_name = msg_type.to_ident();
 
         let mut result: ItemEnum = parse_quote!{
             #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -134,9 +166,11 @@ impl ContractInterface {
     }
 
     fn generate_init_msg(&self) -> ItemStruct {
+        let msg = Ident::new(INIT_MSG, Span::call_site());
+
         let mut result: ItemStruct = parse_quote!{
             #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-            pub struct InitMsg {
+            pub struct #msg {
 
             }
         };
@@ -144,6 +178,117 @@ impl ContractInterface {
         result.fields = extract_fields(&self.init);
 
         result
+    }
+    
+    fn generate_init_fn(&self) -> ItemFn {
+        let msg = Ident::new(INIT_MSG, Span::call_site());
+
+        let mut result: ItemFn = parse_quote! {
+            pub fn init<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+                deps: &mut cosmwasm_std::Extern<S, A, Q>,
+                env: cosmwasm_std::Env,
+                msg: #msg
+            ) -> StdResult<InitResponse> { }
+        };
+
+        let ref method_name = self.init.sig.ident;
+
+        let mut args = Punctuated::<ExprField, Comma>::new();
+
+        for input in &self.init.sig.inputs {
+            let ident = extract_fn_arg_ident(input);
+            args.push(parse_quote!(msg.#ident));
+        }
+
+        let default_impl = default_impl_ident!(self.ident.to_string());
+
+        let call: ExprCall = parse_quote!(#default_impl::#method_name(#args, deps, env));
+        result.block.stmts.push(Stmt::Expr(Expr::Call(call)));
+
+        result
+    }
+    
+    fn generate_handle_fn(&self) -> ItemFn {
+        let msg = MsgType::Handle.to_ident();
+
+        let mut result: ItemFn = parse_quote! {
+            pub fn handle<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+                deps: &mut cosmwasm_std::Extern<S, A, Q>,
+                env: cosmwasm_std::Env,
+                msg: #msg
+            ) -> StdResult<cosmwasm_std::HandleResponse> { }
+        };
+
+        let match_expr = self.create_match_expr(MsgType::Handle);
+        result.block.stmts.push(Stmt::Expr(match_expr));
+
+        result
+    }
+
+    fn generate_query_fn(&self) -> ItemFn {
+        let msg = MsgType::Query.to_ident();
+
+        let mut result: ItemFn = parse_quote! {
+            pub fn query<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+                deps: & cosmwasm_std::Extern<S, A, Q>,
+                msg: #msg
+            ) -> cosmwasm_std::QueryResult { }
+        };
+
+        let match_expr = self.create_match_expr(MsgType::Query);
+        result.block.stmts.push(Stmt::Expr(match_expr));
+
+        result
+    }
+
+    fn create_match_expr(&self, msg_type: MsgType) -> Expr {
+        let methods = match msg_type {
+            MsgType::Handle => &self.handle,
+            MsgType::Query => &self.query
+        };
+
+        let enum_name = msg_type.clone().to_ident();
+
+        let mut match_expr: ExprMatch = parse_quote!(match msg {});
+
+        for method in methods {
+            let ref method_name = method.sig.ident;
+
+            let variant = to_pascal(&method_name.to_string());
+            let variant = Ident::new(&variant, Span::call_site());
+
+            let mut args = Punctuated::<Ident, Comma>::new();
+
+            for input in &method.sig.inputs {
+                let ident = extract_fn_arg_ident(input);
+                args.push(ident);
+            }
+
+            // Push a comma in the end so that we don't have to place one manually in
+            // the parse_quote! call below. This is because a function might have no
+            // arguments.
+            if args.len() > 0 {
+                args.push_punct(Comma(Span::call_site()));
+            }
+
+            let default_impl = default_impl_ident!(self.ident.to_string());
+
+            match msg_type {
+                MsgType::Handle => {
+                    match_expr.arms.push(
+                        parse_quote!(#enum_name::#variant { #args } => #default_impl::#method_name(#args deps, env))
+                    );
+                },
+                MsgType::Query => {
+                    match_expr.arms.push(
+                        parse_quote!(#enum_name::#variant { #args } => cosmwasm_std::to_binary(&#default_impl::#method_name(#args deps)?))
+                    );
+                }
+            }
+
+        }
+
+        Expr::Match(match_expr)
     }
 }
 
@@ -204,4 +349,16 @@ fn validate_return_type(method: &TraitItemMethod, path: &Path) {
 
     let expected_type = format!("{}", quote!{ #path });
     panic!("Expecting return type: StdResult<{}>", expected_type);
+}
+
+fn extract_fn_arg_ident(arg: &FnArg) -> Ident {
+    match arg {
+        FnArg::Typed(pat_type) => {
+            match *pat_type.pat.to_owned() {
+                Pat::Ident(pat_ident) => return pat_ident.ident,
+                _ => panic!("Expected identifier.")
+            };
+        },
+        FnArg::Receiver(_) => panic!("Method definition cannot contain \"self\"")
+    }
 }
