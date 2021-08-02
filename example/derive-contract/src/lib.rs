@@ -50,7 +50,7 @@ pub trait Votes {
     #[query]
     fn status() -> StdResult<Response> {
         let votes = load_votes(&deps.storage)?;
-
+        
         Ok(Response {
             votes
         })
@@ -129,7 +129,7 @@ mod test {
                 votes: option2
             }
         ];
-        let query_response = query(deps, QueryMsg::Status {}).unwrap();
+        let query_response = query(deps, QueryMsg::Status {}, DefaultVotesImpl).unwrap();
         let res: Response = from_binary(&query_response).unwrap();
 
         assert_eq!(res.votes, compare_votes);
@@ -148,6 +148,7 @@ mod test {
             InitMsg {
                 options: vec![String::from("option1"), String::from("option2")],
             },
+            DefaultVotesImpl
         );
 
         // assert init didn't run into any trouble
@@ -165,6 +166,7 @@ mod test {
             HandleMsg::Vote {
                 option: "option1".to_string(),
             },
+            DefaultVotesImpl
         ).unwrap();
 
         // assert vote has been recorded properly
@@ -178,6 +180,7 @@ mod test {
             HandleMsg::Vote {
                 option: "option1".to_string(),
             },
+            DefaultVotesImpl
         );
 
         // assert we get error, since the vote cannot be cast twice by the same voter
@@ -197,6 +200,7 @@ mod test {
             HandleMsg::Vote {
                 option: "option3".to_string(),
             },
+            DefaultVotesImpl
         );
 
         // assert we get error, since we tried voting for option that doesn't exist
@@ -216,6 +220,7 @@ mod test {
             HandleMsg::Vote {
                 option: "option2".to_string(),
             },
+            DefaultVotesImpl
         ).unwrap();
 
         // assert voting went okay, and the proper votes are recorded

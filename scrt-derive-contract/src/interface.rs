@@ -2,7 +2,7 @@ use syn::{
     TraitItemMethod, Path, NestedMeta, AttributeArgs, ItemTrait,
     Meta, TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
     Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
-    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField, ExprCall,
+    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField,
     parse_quote
 };
 use syn::token::{Comma, Brace, Colon};
@@ -21,6 +21,7 @@ macro_rules! default_impl_ident {
 const INIT_MSG: &str = "InitMsg";
 const HANDLE_MSG: &str = "HandleMsg";
 const QUERY_MSG: &str = "QueryMsg";
+const CONTRACT_ARG: &str = "contract";
 
 pub struct ContractInterface {
     ident: Ident,
@@ -36,7 +37,7 @@ enum MsgType {
 }
 
 impl MsgType {
-    pub fn to_ident(self) -> Ident {
+    pub fn to_ident(&self) -> Ident {
         match self {
             Self::Handle => Ident::new(HANDLE_MSG, Span::call_site()),
             Self::Query => Ident::new(QUERY_MSG, Span::call_site())
@@ -182,12 +183,14 @@ impl ContractInterface {
     
     fn generate_init_fn(&self) -> ItemFn {
         let msg = Ident::new(INIT_MSG, Span::call_site());
+        let arg = self.create_trait_arg();
 
         let mut result: ItemFn = parse_quote! {
             pub fn init<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
                 deps: &mut cosmwasm_std::Extern<S, A, Q>,
                 env: cosmwasm_std::Env,
-                msg: #msg
+                msg: #msg,
+                #arg
             ) -> StdResult<InitResponse> { }
         };
 
@@ -197,41 +200,46 @@ impl ContractInterface {
 
         for input in &self.init.sig.inputs {
             let ident = extract_fn_arg_ident(input);
-            args.push(parse_quote!(msg.#ident));
+            args.push_value(parse_quote!(msg.#ident));
+            args.push_punct(Comma(Span::call_site()));
         }
 
-        let default_impl = default_impl_ident!(self.ident.to_string());
+        let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
 
-        let call: ExprCall = parse_quote!(#default_impl::#method_name(#args, deps, env));
-        result.block.stmts.push(Stmt::Expr(Expr::Call(call)));
+        let call: Expr = parse_quote!(#arg_name.#method_name(#args deps, env));
+        result.block.stmts.push(Stmt::Expr(call));
 
         result
     }
     
     fn generate_handle_fn(&self) -> ItemFn {
         let msg = MsgType::Handle.to_ident();
+        let arg = self.create_trait_arg();
 
         let mut result: ItemFn = parse_quote! {
             pub fn handle<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
                 deps: &mut cosmwasm_std::Extern<S, A, Q>,
                 env: cosmwasm_std::Env,
-                msg: #msg
+                msg: #msg,
+                #arg
             ) -> StdResult<cosmwasm_std::HandleResponse> { }
         };
 
         let match_expr = self.create_match_expr(MsgType::Handle);
         result.block.stmts.push(Stmt::Expr(match_expr));
-
+        
         result
     }
 
     fn generate_query_fn(&self) -> ItemFn {
         let msg = MsgType::Query.to_ident();
+        let arg = self.create_trait_arg();
 
         let mut result: ItemFn = parse_quote! {
             pub fn query<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
-                deps: & cosmwasm_std::Extern<S, A, Q>,
-                msg: #msg
+                deps: &cosmwasm_std::Extern<S, A, Q>,
+                msg: #msg,
+                #arg
             ) -> cosmwasm_std::QueryResult { }
         };
 
@@ -247,8 +255,7 @@ impl ContractInterface {
             MsgType::Query => &self.query
         };
 
-        let enum_name = msg_type.clone().to_ident();
-
+        let enum_name = msg_type.to_ident();
         let mut match_expr: ExprMatch = parse_quote!(match msg {});
 
         for method in methods {
@@ -261,34 +268,34 @@ impl ContractInterface {
 
             for input in &method.sig.inputs {
                 let ident = extract_fn_arg_ident(input);
-                args.push(ident);
-            }
-
-            // Push a comma in the end so that we don't have to place one manually in
-            // the parse_quote! call below. This is because a function might have no
-            // arguments.
-            if args.len() > 0 {
+                args.push_value(ident);
                 args.push_punct(Comma(Span::call_site()));
             }
-
-            let default_impl = default_impl_ident!(self.ident.to_string());
+            
+            let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
 
             match msg_type {
                 MsgType::Handle => {
                     match_expr.arms.push(
-                        parse_quote!(#enum_name::#variant { #args } => #default_impl::#method_name(#args deps, env))
+                        parse_quote!(#enum_name::#variant { #args } => #arg_name.#method_name(#args deps, env))
                     );
                 },
                 MsgType::Query => {
                     match_expr.arms.push(
-                        parse_quote!(#enum_name::#variant { #args } => cosmwasm_std::to_binary(&#default_impl::#method_name(#args deps)?))
+                        parse_quote!(#enum_name::#variant { #args } => cosmwasm_std::to_binary(&#arg_name.#method_name(#args deps)?))
                     );
                 }
             }
-
         }
 
         Expr::Match(match_expr)
+    }
+    
+    fn create_trait_arg(&self) -> FnArg {
+        let ref trait_name = self.ident;
+        let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
+
+        parse_quote!(#arg_name: impl #trait_name)
     }
 }
 

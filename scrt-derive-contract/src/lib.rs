@@ -1,5 +1,5 @@
 use syn::{
-    ItemFn, ItemTrait, AttributeArgs,
+    AttributeArgs, ItemFn, ItemTrait,
     parse_macro_input, parse_quote
 };
 use quote::quote;
@@ -76,6 +76,8 @@ fn add_deps_generics(func: &mut ItemFn) {
 }
 
 fn add_fn_args(func: &mut ItemFn, is_tx: bool) {
+    func.sig.inputs.insert(0, parse_quote!(&self));
+    
     if is_tx {
         func.sig.inputs.push(parse_quote!(deps: &mut cosmwasm_std::Extern<S, A, Q>));
         func.sig.inputs.push(parse_quote!(env: cosmwasm_std::Env));
