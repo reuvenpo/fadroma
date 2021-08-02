@@ -19,7 +19,7 @@ const KEY_VOTES: &[u8] = b"votes";
 #[contract(Response)]
 pub trait Votes {
     #[init]
-    fn new(options: Vec<String>) -> StdResult<InitResponse> {
+    fn new(options: Vec<String>) -> cosmwasm_std::StdResult<cosmwasm_std::InitResponse> {
         let options = options.into_iter().map(|x| VoteOption::new(x)).collect();
         save_votes(&mut deps.storage, &options)?;
 

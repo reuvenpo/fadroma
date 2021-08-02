@@ -3,7 +3,7 @@ use syn::{
     Meta, TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
     Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
     ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField,
-    parse_quote
+    GenericArgument, PathArguments, parse_quote
 };
 use syn::token::{Comma, Brace, Colon};
 use syn::punctuated::Punctuated;
@@ -59,10 +59,8 @@ impl ContractInterface {
                     if let AttrStyle::Inner(_) = attr.style {
                         panic!("Invalid attribute style")
                     }
-    
-                    // TODO: need more robust detection that includes namespaces as well
-                    // also, there is probably a better way to do this
-                    let ref path = attr.path;
+
+                    let ref path = attr.path.segments.last().unwrap();
                     let path = format!("{}", quote!{ #path });
     
                     match path.as_str() {
@@ -271,7 +269,7 @@ impl ContractInterface {
                 args.push_value(ident);
                 args.push_punct(Comma(Span::call_site()));
             }
-            
+
             let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
 
             match msg_type {
@@ -345,11 +343,23 @@ fn get_response_type(args: AttributeArgs) -> Path {
 fn validate_return_type(method: &TraitItemMethod, path: &Path) {
     if let ReturnType::Type(_, return_type) = &method.sig.output {
         if let Type::Path(return_type_path) = return_type.as_ref() {
-            // TODO: namespaces?
-            let path: Path = parse_quote!(StdResult<#path>);
+            assert!(return_type_path.qself.is_none(), "Unexpected \"Self\" in return type.");
 
-            if path == return_type_path.path {
-                return;
+            let last = return_type_path.path.segments.last().unwrap();
+            
+            if last.ident.to_string().as_str() == "StdResult" {
+                if let PathArguments::AngleBracketed(args) = &last.arguments {
+                    if let GenericArgument::Type(ty) =  &args.args[0] {
+                        if let Type::Path(generic_path) = ty {
+                            let ref generic_ident = generic_path.path.segments.last().unwrap().ident;
+                            let ref expected = path.segments.last().unwrap().ident;
+                            
+                            if *generic_ident == *expected {
+                                return;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
