@@ -1,13 +1,15 @@
 use syn::{
-    AttributeArgs, ItemFn, ItemTrait,
+    AttributeArgs, ItemFn, ItemTrait, ItemEnum,
     parse_macro_input, parse_quote
 };
 use quote::quote;
 
 use crate::interface::ContractInterface;
+use crate::deserialize_flat::impl_deserialize_flat;
 
 mod interface;
 mod utils;
+mod deserialize_flat;
 
 #[proc_macro_attribute]
 pub fn contract(args: proc_macro::TokenStream, trait_: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -64,6 +66,19 @@ pub fn query(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> p
 
     let result = quote! {
         #ast
+    };
+
+    proc_macro::TokenStream::from(result)
+}
+
+#[proc_macro_derive(DeserializeFlat)]
+pub fn deserialize_flat(item: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let ast = parse_macro_input!(item as ItemEnum);
+
+    let impl_item = impl_deserialize_flat(&ast);
+
+    let result = quote! {
+        #impl_item
     };
 
     proc_macro::TokenStream::from(result)
