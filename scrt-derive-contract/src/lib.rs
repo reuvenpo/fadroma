@@ -1,37 +1,35 @@
 use syn::{
-    AttributeArgs, ItemFn, ItemTrait, ItemEnum,
+    AttributeArgs, TraitItemMethod, ItemTrait, ItemEnum,
     parse_macro_input, parse_quote
 };
 use quote::quote;
 
-use crate::interface::ContractInterface;
+use crate::contract::{Contract, ContractType};
 use crate::deserialize_flat::impl_deserialize_flat;
 
-mod interface;
+mod contract;
+mod args;
 mod utils;
 mod deserialize_flat;
 
 #[proc_macro_attribute]
 pub fn contract(args: proc_macro::TokenStream, trait_: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let args = parse_macro_input!(args as AttributeArgs);
-    let ast = parse_macro_input!(trait_ as ItemTrait);
+    generate_contract(args, trait_, ContractType::Contract)
+}
 
-    let item_trait = quote!(#ast);
+#[proc_macro_attribute]
+pub fn interface(args: proc_macro::TokenStream, trait_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    generate_contract(args, trait_, ContractType::Interface)
+}
 
-    let interface = ContractInterface::parse(args, ast);
-    let boilerplate = interface.generate_boilerplate();
-
-    let result = quote! {
-        #item_trait
-        #boilerplate
-    };
-
-    proc_macro::TokenStream::from(result)
+#[proc_macro_attribute]
+pub fn contract_impl(args: proc_macro::TokenStream, trait_: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    generate_contract(args, trait_, ContractType::Impl)
 }
 
 #[proc_macro_attribute]
 pub fn init(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut ast = parse_macro_input!(func as ItemFn);
+    let mut ast = parse_macro_input!(func as TraitItemMethod);
 
     add_deps_generics(&mut ast);
     add_fn_args(&mut ast, true);
@@ -45,7 +43,7 @@ pub fn init(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> pr
 
 #[proc_macro_attribute]
 pub fn handle(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut ast = parse_macro_input!(func as ItemFn);
+    let mut ast = parse_macro_input!(func as TraitItemMethod);
 
     add_deps_generics(&mut ast);
     add_fn_args(&mut ast, true);
@@ -59,7 +57,7 @@ pub fn handle(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> 
 
 #[proc_macro_attribute]
 pub fn query(_args: proc_macro::TokenStream, func: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut ast = parse_macro_input!(func as ItemFn);
+    let mut ast = parse_macro_input!(func as TraitItemMethod);
 
     add_deps_generics(&mut ast);
     add_fn_args(&mut ast, false);
@@ -84,13 +82,34 @@ pub fn deserialize_flat(item: proc_macro::TokenStream) -> proc_macro::TokenStrea
     proc_macro::TokenStream::from(result)
 }
 
-fn add_deps_generics(func: &mut ItemFn) {    
+fn generate_contract(
+    args: proc_macro::TokenStream,
+    trait_: proc_macro::TokenStream,
+    ty: ContractType
+) -> proc_macro::TokenStream {
+    let args = parse_macro_input!(args as AttributeArgs);
+    let ast = parse_macro_input!(trait_ as ItemTrait);
+
+    let item_trait = quote!(#ast);
+
+    let contract = Contract::parse(args, ast, ty);
+    let boilerplate = contract.generate_boilerplate();
+
+    let result = quote! {
+        #item_trait
+        #boilerplate
+    };
+
+    proc_macro::TokenStream::from(result)
+}
+
+fn add_deps_generics(func: &mut TraitItemMethod) {    
     func.sig.generics.params.push(parse_quote!(S: cosmwasm_std::Storage));
     func.sig.generics.params.push(parse_quote!(A: cosmwasm_std::Api));
     func.sig.generics.params.push(parse_quote!(Q: cosmwasm_std::Querier));
 }
 
-fn add_fn_args(func: &mut ItemFn, is_tx: bool) {
+fn add_fn_args(func: &mut TraitItemMethod, is_tx: bool) {
     func.sig.inputs.insert(0, parse_quote!(&self));
     
     if is_tx {

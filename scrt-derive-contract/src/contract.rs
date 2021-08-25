@@ -1,6 +1,6 @@
 use syn::{
-    TraitItemMethod, Path, NestedMeta, AttributeArgs, ItemTrait,
-    Meta, TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
+    TraitItemMethod, Path, AttributeArgs, ItemTrait,
+    TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
     Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
     ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField,
     GenericArgument, PathArguments, parse_quote
@@ -10,6 +10,7 @@ use syn::punctuated::Punctuated;
 use quote::quote;
 use proc_macro2::{TokenStream, Span};
 
+use crate::args::ContractArgs;
 use crate::utils::to_pascal;
 
 macro_rules! default_impl_ident {
@@ -23,14 +24,26 @@ const HANDLE_MSG: &str = "HandleMsg";
 const QUERY_MSG: &str = "QueryMsg";
 const CONTRACT_ARG: &str = "contract";
 
-pub struct ContractInterface {
+pub struct Contract {
+    ty: ContractType,
+    args: ContractArgs,
     ident: Ident,
     init: TraitItemMethod,
     handle: Vec<TraitItemMethod>,
     query: Vec<TraitItemMethod>
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+pub enum ContractType {
+    /// A contract that directly implements its functionality.
+    Contract,
+    /// An interface defines the methods that a contract exposes.
+    Interface,
+    /// A contract that implements an interface.
+    Impl
+}
+
+#[derive(Clone, Copy)]
 enum MsgType {
     Handle,
     Query
@@ -45,13 +58,13 @@ impl MsgType {
     }
 }
 
-impl ContractInterface {
-    pub fn parse(args: AttributeArgs, item_trait: ItemTrait) -> Self {
-        let response = get_response_type(args);
+impl Contract {
+    pub fn parse(args: AttributeArgs, item_trait: ItemTrait, ty: ContractType) -> Self {
+        let args = ContractArgs::parse(args);
         
-        let mut init: Option<TraitItemMethod> = None;
-        let mut handle: Vec<TraitItemMethod> = vec![];
-        let mut query: Vec<TraitItemMethod> = vec![];
+        let mut init = None;
+        let mut handle = vec![];
+        let mut query = vec![];
     
         for item in item_trait.items.into_iter() {
             if let TraitItem::Method(method) = item {
@@ -65,23 +78,21 @@ impl ContractInterface {
     
                     match path.as_str() {
                         "init" => {
-                            if init.is_some() {
-                                panic!("Only one method can be annotated as #[init].")
-                            }
+                            assert!(init.is_none(), "Only one method can be annotated as #[init].");
     
-                            validate_return_type(&method, &parse_quote!(InitResponse));
+                            validate_method(&method, &parse_quote!(InitResponse), ty);
                             init = Some(method);
     
                             break;
                         },
                         "handle" => {
-                            validate_return_type(&method, &parse_quote!(HandleResponse));
+                            validate_method(&method, &parse_quote!(HandleResponse), ty);
                             handle.push(method);
     
                             break;
                         },
                         "query" => {
-                            validate_return_type(&method, &response);
+                            validate_method(&method, &args.response, ty);
                             query.push(method);
     
                             break;
@@ -93,6 +104,8 @@ impl ContractInterface {
         }
     
         Self {
+            ty,
+            args,
             ident: item_trait.ident,
             init: init.expect("Expecting one method to be annotated as #[init]"),
             handle,
@@ -101,11 +114,19 @@ impl ContractInterface {
     }
 
     pub fn generate_boilerplate(&self) -> TokenStream {
-        let struct_impl = self.generate_default_impl();
-
         let init_msg = self.generate_init_msg();
         let handle_msg = self.generate_messages(MsgType::Handle);
         let query_msg = self.generate_messages(MsgType::Query);
+
+        if let ContractType::Interface = self.ty {
+            return quote! {
+                #init_msg
+                #handle_msg
+                #query_msg
+            };
+        }
+
+        let struct_impl = self.generate_default_impl();
 
         let init = self.generate_init_fn();
         let handle = self.generate_handle_fn();
@@ -326,21 +347,11 @@ fn extract_fields(method: &TraitItemMethod) -> Fields {
     Fields::Named(fields)
 }
 
-fn get_response_type(args: AttributeArgs) -> Path {
-    if args.len() != 1 {
-        panic!("Expected exactly 1 argument in \"contract\" attribute.")
+fn validate_method(method: &TraitItemMethod, path: &Path, contract_type: ContractType) {
+    if let ContractType::Interface = contract_type {
+        assert!(method.default.is_none(), "Contract interface method cannot contain a default implementation.");
     }
 
-    if let NestedMeta::Meta(meta) = args.first().unwrap().to_owned() {
-        if let Meta::Path(path) = meta {
-            return path;
-        }
-    }
-
-    panic!("Expected a type argument in \"contract\" attribute.")
-}
-
-fn validate_return_type(method: &TraitItemMethod, path: &Path) {
     if let ReturnType::Type(_, return_type) = &method.sig.output {
         if let Type::Path(return_type_path) = return_type.as_ref() {
             assert!(return_type_path.qself.is_none(), "Unexpected \"Self\" in return type.");
