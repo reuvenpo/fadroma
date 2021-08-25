@@ -1,6 +1,9 @@
-use syn::{Path, NestedMeta, Meta, AttributeArgs, Lit, PathArguments};
+use std::collections::HashMap;
+
+use syn::{Path, NestedMeta, Meta, AttributeArgs, Lit, LitStr, PathArguments, MetaNameValue};
 use syn::token::Comma;
 use syn::punctuated::Punctuated;
+use syn::parse::Parse;
 
 pub struct ContractArgs {
     pub response: Path,
@@ -15,11 +18,15 @@ pub struct Component {
     pub skip_query: bool,
 }
 
+struct MetaNameValueParser {
+    entries: HashMap<String, LitStr>
+}
+
 impl ContractArgs {
     pub fn parse(args: AttributeArgs) -> Self {
         assert!(args.len() > 0, "Expected at least \"response\" argument in \"contract\" attribute.");
 
-        let mut response = None;
+        let mut parser = MetaNameValueParser::new();
         let mut components = vec![];
 
         for arg in args {
@@ -36,19 +43,7 @@ impl ContractArgs {
                         }
                     },
                     Meta::NameValue(name_val) => {
-                        let name = extract_path_ident_name(&name_val.path);
-
-                        if name == "response" {
-                            assert!(response.is_none(), "Duplicate \"response\" argument.");
-                            
-                            if let Lit::Str(val) = name_val.lit {
-                                response = Some(val.parse().unwrap());
-                            } else {
-                                panic!("Expected string literal with impl type.")
-                            }
-                        } else {
-                            panic!("Unexpected attribute: \"{}\"", name);
-                        }
+                        parser.parse(name_val);
                     }
                     _ => panic!("Unexpected meta value in \"contract\" attribute.")
                 }
@@ -57,8 +52,11 @@ impl ContractArgs {
             }
         }
 
+        let response = parser.require("response");
+        parser.finalize();
+        
         Self {
-            response: response.expect("Expected \"response\" argument in \"contract\" attribute."),
+            response,
             components
         }
     }
@@ -69,31 +67,15 @@ impl Component {
         let mut skip_init = false;
         let mut skip_handle = false;
         let mut skip_query = false;
-        let mut custom_impl = None;
-        let mut path = None;
+
+        let mut parser = MetaNameValueParser::new();
 
         for entry in nested {
             match entry {
                 NestedMeta::Meta(meta) => {
                     match meta {
                         Meta::NameValue(name_val) => {
-                            let name = extract_path_ident_name(&name_val.path);
-
-                            match name.as_str() {
-                                "path" => {
-                                    if let Lit::Str(val) = name_val.lit {
-                                        path = Some(val.parse().unwrap());
-                                    }
-                                },
-                                "custom_impl" => {
-                                    if let Lit::Str(val) = name_val.lit {
-                                        custom_impl = Some(val.parse().unwrap());
-                                    } else {
-                                        panic!("Expected string literal with impl type.")
-                                    }
-                                },
-                                _ => panic!("Unexpected attribute: \"{}\"", name)
-                            }
+                            parser.parse(name_val);
                         },
                         Meta::List(list) => {
                             let name = extract_path_ident_name(&list.path);
@@ -125,12 +107,62 @@ impl Component {
             }
         }
 
+        let path = parser.require("path");
+        let custom_impl = parser.get("custom_impl");
+        parser.finalize();
+
         Self {
-            path: path.expect("Module \"path\" argument expected."),
+            path,
             custom_impl,
             skip_init,
             skip_handle,
             skip_query
+        }
+    }
+}
+
+impl MetaNameValueParser {
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new()
+        }
+    }
+
+    pub fn parse(&mut self, name_val: MetaNameValue) {
+        let name = extract_path_ident_name(&name_val.path);
+
+        match name_val.lit {
+            Lit::Str(val) => {
+                if self.entries.contains_key(&name) {
+                    panic!("Duplicate \"{}\" attribute.", name)
+                }
+
+                self.entries.insert(name, val);
+            },
+            _ => panic!("Expected string literal for \"{}\".", name)
+        }
+    }
+
+    pub fn require<T: Parse>(&mut self, name: &str) -> T {
+        if let Some(value) = self.entries.remove(name) {
+            value.parse().unwrap()
+        } else {
+            panic!("Expected attribute: \"{}\"", name)
+        }
+    }
+
+    pub fn get<T: Parse>(&mut self, name: &str) -> Option<T> {
+        if let Some(value) = self.entries.remove(name) {
+            Some(value.parse().unwrap())
+        } else {
+            None
+        }
+    }
+
+    pub fn finalize(mut self) {
+        if self.entries.len() > 0 {
+            let unexpected: Vec<String> = self.entries.drain().map(|x| x.0).collect();
+            panic!("Unexpected atrributes: {}", unexpected.join(", "))
         }
     }
 }
