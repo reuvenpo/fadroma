@@ -1,8 +1,8 @@
 use syn::{
     TraitItemMethod, Path, AttributeArgs, ItemTrait, Meta, Lit,
     TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum, TypePath,
-    Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
-    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField, NestedMeta,
+    Variant, FnArg, FieldsNamed, Field, Visibility, Pat, NestedMeta,
+    Fields, ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField,
     GenericArgument, PathArguments, parse_quote
 };
 use syn::token::{Comma, Brace, Colon};
@@ -13,23 +13,23 @@ use proc_macro2::{TokenStream, Span};
 use crate::args::ContractArgs;
 use crate::utils::to_pascal;
 
-macro_rules! default_impl_ident {
-    ($msg:expr) => {
-        Ident::new(&format!("Default{}Impl", $msg), Span::call_site())
-    };
-}
+pub const INIT_MSG: &str = "InitMsg";
+pub const HANDLE_MSG: &str = "HandleMsg";
+pub const QUERY_MSG: &str = "QueryMsg";
+pub const RESPONSE_MSG: &str = "QueryResponse";
+pub const DEFAULT_IMPL_STRUCT: &str = "DefaultImpl";
+pub const INIT_FN: &str = "init";
+pub const HANDLE_FN: &str = "handle";
+pub const QUERY_FN: &str = "query";
 
-const INIT_MSG: &str = "InitMsg";
-const HANDLE_MSG: &str = "HandleMsg";
-const QUERY_MSG: &str = "QueryMsg";
-const RESPONSE_MSG: &str = "QueryResponse";
 const CONTRACT_ARG: &str = "contract";
 
 pub struct Contract {
     ty: ContractType,
     args: ContractArgs,
     ident: Ident,
-    init: TraitItemMethod,
+    /// Optional because a component might not want to have an init method.
+    init: Option<TraitItemMethod>,
     handle: Vec<TraitItemMethod>,
     query: Vec<TraitItemMethod>
 }
@@ -108,7 +108,7 @@ impl Contract {
             ty,
             args,
             ident: item_trait.ident,
-            init: init.expect("Expecting one method to be annotated as #[init]"),
+            init,
             handle,
             query
         }    
@@ -148,7 +148,7 @@ impl Contract {
     }
 
     fn generate_default_impl(&self) -> TokenStream {
-        let struct_ident = default_impl_ident!(self.ident.to_string());
+        let struct_ident = Ident::new(DEFAULT_IMPL_STRUCT, Span::call_site());
         let ref trait_ident = self.ident;
 
         quote! {
@@ -181,9 +181,22 @@ impl Contract {
             result.variants.push(Variant {
                 attrs: vec![],
                 ident: Ident::new(&variant_name, Span::call_site()),
-                fields,
+                fields: Fields::Named(fields),
                 discriminant: None
             });
+        }
+
+        match msg_type {
+            MsgType::Handle => {
+                for component in self.args.handle_components() {
+                    result.variants.push(component.create_enum_variant(HANDLE_MSG));
+                }
+            },
+            MsgType::Query => {
+                for component in self.args.query_components() {
+                    result.variants.push(component.create_enum_variant(QUERY_MSG));
+                }
+            }
         }
         
         result
@@ -230,61 +243,90 @@ impl Contract {
             });
         }
 
-        result
-    }
-
-    fn generate_init_msg(&self) -> ItemStruct {
-        let msg = Ident::new(INIT_MSG, Span::call_site());
-
-        let mut result: ItemStruct = parse_quote!{
-            #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-            pub struct #msg {
-
-            }
-        };
-
-        result.fields = extract_fields(&self.init);
-
-        result
-    }
-    
-    fn generate_init_fn(&self) -> ItemFn {
-        let msg = Ident::new(INIT_MSG, Span::call_site());
-        let arg = self.create_trait_arg();
-
-        let mut result: ItemFn = parse_quote! {
-            pub fn init<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
-                deps: &mut cosmwasm_std::Extern<S, A, Q>,
-                env: cosmwasm_std::Env,
-                msg: #msg,
-                #arg
-            ) -> StdResult<InitResponse> { }
-        };
-
-        let ref method_name = self.init.sig.ident;
-
-        let mut args = Punctuated::<ExprField, Comma>::new();
-
-        for input in &self.init.sig.inputs {
-            let ident = extract_fn_arg_ident(input);
-            args.push_value(parse_quote!(msg.#ident));
-            args.push_punct(Comma(Span::call_site()));
+        for component in self.args.query_components() {
+            result.variants.push(component.create_enum_variant(RESPONSE_MSG));
         }
 
-        let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
-
-        let call: Expr = parse_quote!(#arg_name.#method_name(#args deps, env));
-        result.block.stmts.push(Stmt::Expr(call));
-
         result
+    }
+
+    fn generate_init_msg(&self) -> TokenStream {
+        if let Some(init) = &self.init {
+            let msg = Ident::new(INIT_MSG, Span::call_site());
+
+            let mut result: ItemStruct = parse_quote!{
+                #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+                pub struct #msg {
+    
+                }
+            };
+    
+            let mut fields = extract_fields(&init);
+    
+            for component in self.args.init_components() {
+                fields.named.push(Field {
+                    attrs: vec![],
+                    vis: parse_quote!(pub),
+                    ident: Some(component.mod_ident(false)),
+                    ty: Type::Path(TypePath {
+                        qself: None,
+                        path: component.path_concat(&msg)
+                    }),
+                    colon_token: Some(Colon(Span::call_site()))
+                });
+            }
+    
+            result.fields = Fields::Named(fields);
+    
+            return quote!(#result);
+        }
+
+        TokenStream::new()
+    }
+    
+    fn generate_init_fn(&self) -> TokenStream {
+        if let Some(init) = &self.init {
+            let msg = Ident::new(INIT_MSG, Span::call_site());
+            let fn_name = Ident::new(INIT_FN, Span::call_site());
+            let arg = self.create_trait_arg();
+    
+            let mut result: ItemFn = parse_quote! {
+                pub fn #fn_name<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+                    deps: &mut cosmwasm_std::Extern<S, A, Q>,
+                    env: cosmwasm_std::Env,
+                    msg: #msg,
+                    #arg
+                ) -> StdResult<InitResponse> { }
+            };
+    
+            let ref method_name = init.sig.ident;
+    
+            let mut args = Punctuated::<ExprField, Comma>::new();
+    
+            for input in &init.sig.inputs {
+                let ident = extract_fn_arg_ident(input);
+                args.push_value(parse_quote!(msg.#ident));
+                args.push_punct(Comma(Span::call_site()));
+            }
+    
+            let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
+    
+            let call: Expr = parse_quote!(#arg_name.#method_name(#args deps, env));
+            result.block.stmts.push(Stmt::Expr(call));
+    
+            return quote!(#result);
+        }
+
+        TokenStream::new()
     }
     
     fn generate_handle_fn(&self) -> ItemFn {
         let msg = MsgType::Handle.to_ident();
         let arg = self.create_trait_arg();
+        let fn_name = Ident::new(HANDLE_FN, Span::call_site());
 
         let mut result: ItemFn = parse_quote! {
-            pub fn handle<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+            pub fn #fn_name<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
                 deps: &mut cosmwasm_std::Extern<S, A, Q>,
                 env: cosmwasm_std::Env,
                 msg: #msg,
@@ -301,9 +343,10 @@ impl Contract {
     fn generate_query_fn(&self) -> ItemFn {
         let msg = MsgType::Query.to_ident();
         let arg = self.create_trait_arg();
+        let fn_name = Ident::new(QUERY_FN, Span::call_site());
 
         let mut result: ItemFn = parse_quote! {
-            pub fn query<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
+            pub fn #fn_name<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
                 deps: &cosmwasm_std::Extern<S, A, Q>,
                 msg: #msg,
                 #arg
@@ -355,6 +398,33 @@ impl Contract {
             }
         }
 
+        match msg_type {
+            MsgType::Handle => {
+                for component in self.args.handle_components() {
+                    let mod_name = component.mod_ident(true);
+                    let ref mod_path = component.path;
+                    let impl_struct = component.create_impl_struct();
+                    let handle_fn = Ident::new(HANDLE_FN, Span::call_site());
+
+                    match_expr.arms.push(
+                        parse_quote!(#enum_name::#mod_name(msg) => #mod_path::#handle_fn(deps, env, msg, #impl_struct))
+                    );
+                }
+            },
+            MsgType::Query => {
+                for component in self.args.query_components() {
+                    let mod_name = component.mod_ident(true);
+                    let ref mod_path = component.path;
+                    let impl_struct = component.create_impl_struct();
+                    let query_fn = Ident::new(QUERY_FN, Span::call_site());
+
+                    match_expr.arms.push(
+                        parse_quote!(#enum_name::#mod_name(msg) => #mod_path::#query_fn(deps, msg, #impl_struct))
+                    );
+                }
+            }
+        }
+
         Expr::Match(match_expr)
     }
     
@@ -366,7 +436,7 @@ impl Contract {
     }
 }
 
-fn extract_fields(method: &TraitItemMethod) -> Fields {
+fn extract_fields(method: &TraitItemMethod) -> FieldsNamed {
     let mut fields = FieldsNamed {
         brace_token: Brace(Span::call_site()),
         named: Punctuated::<Field, Comma>::default()
@@ -392,12 +462,17 @@ fn extract_fields(method: &TraitItemMethod) -> Fields {
         }
     }
 
-    Fields::Named(fields)
+    fields
 }
 
 fn validate_method(method: &TraitItemMethod, expected: Option<Path>, contract_type: ContractType) {
-    if let ContractType::Interface = contract_type {
-        assert!(method.default.is_none(), "Contract interface method cannot contain a default implementation.");
+    match contract_type {
+        ContractType::Interface => {
+            assert!(method.default.is_none(), "Contract interface method cannot contain a default implementation: \"{}\".", method.sig.ident);
+        }
+        _ => {
+            assert!(method.default.is_some(), "Contract method must contain a default implementation: \"{}\".", method.sig.ident);
+        }
     }
 
     let result_ty = extract_std_result_type(&method.sig.output);

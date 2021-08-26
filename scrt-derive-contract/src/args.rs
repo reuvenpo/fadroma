@@ -1,20 +1,28 @@
 use std::collections::HashMap;
 
-use syn::{Path, NestedMeta, Meta, AttributeArgs, Lit, LitStr, PathArguments, MetaNameValue};
+use syn::{
+    Path, NestedMeta, Meta, AttributeArgs,
+    Lit, LitStr, PathArguments, MetaNameValue,
+    Ident, Variant, parse_quote
+};
 use syn::token::Comma;
 use syn::punctuated::Punctuated;
 use syn::parse::Parse;
+use proc_macro2::Span;
+
+use crate::contract::DEFAULT_IMPL_STRUCT;
+use crate::utils::to_pascal;
 
 pub struct ContractArgs {
-    pub components: Vec<Component>
+    components: Vec<Component>
 }
 
 pub struct Component {
     pub path: Path,
-    pub custom_impl: Option<Path>,
-    pub skip_init: bool,
-    pub skip_handle: bool,
-    pub skip_query: bool,
+    custom_impl: Option<Path>,
+    skip_init: bool,
+    skip_handle: bool,
+    skip_query: bool,
 }
 
 struct MetaNameValueParser {
@@ -48,6 +56,18 @@ impl ContractArgs {
         Self {
             components
         }
+    }
+
+    pub fn init_components(&self) -> impl Iterator<Item = &Component> {
+        self.components.iter().filter(|x| !x.skip_init)
+    }
+
+    pub fn handle_components(&self) -> impl Iterator<Item = &Component> {
+        self.components.iter().filter(|x| !x.skip_handle)
+    }
+
+    pub fn query_components(&self) -> impl Iterator<Item = &Component> {
+        self.components.iter().filter(|x| !x.skip_query)
     }
 }
 
@@ -107,6 +127,40 @@ impl Component {
             skip_handle,
             skip_query
         }
+    }
+
+    pub fn path_concat(&self, ident: &Ident) -> Path {
+        let ref path = self.path;
+
+        parse_quote!(#path::#ident)
+    }
+
+    pub fn create_impl_struct(&self) -> Path {
+        let ref path = self.path;
+
+        if let Some(custom_impl) = &self.custom_impl {
+            return parse_quote!(#path::#custom_impl);
+        }
+
+        let default = Ident::new(DEFAULT_IMPL_STRUCT, Span::call_site());
+        parse_quote!(#path::#default)
+    }
+
+    pub fn create_enum_variant(&self, msg_name: &'static str) -> Variant {
+        let mod_ident = self.mod_ident(true);
+        let msg_path = self.path_concat(&Ident::new(msg_name, Span::call_site()));
+
+        parse_quote!(#mod_ident(#msg_path))
+    }
+
+    pub fn mod_ident(&self, pascal_case: bool) -> Ident {
+        let ident = self.path.segments.last().unwrap().ident.clone();
+
+        if pascal_case {
+            return Ident::new(&to_pascal(&ident.to_string()), Span::call_site());
+        }
+
+        ident
     }
 }
 
