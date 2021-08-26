@@ -6,7 +6,6 @@ use syn::punctuated::Punctuated;
 use syn::parse::Parse;
 
 pub struct ContractArgs {
-    pub response: Path,
     pub components: Vec<Component>
 }
 
@@ -24,9 +23,6 @@ struct MetaNameValueParser {
 
 impl ContractArgs {
     pub fn parse(args: AttributeArgs) -> Self {
-        assert!(args.len() > 0, "Expected at least \"response\" argument in \"contract\" attribute.");
-
-        let mut parser = MetaNameValueParser::new();
         let mut components = vec![];
 
         for arg in args {
@@ -42,9 +38,6 @@ impl ContractArgs {
                             panic!("Unexpected attribute: \"{}\"", name);
                         }
                     },
-                    Meta::NameValue(name_val) => {
-                        parser.parse(name_val);
-                    }
                     _ => panic!("Unexpected meta value in \"contract\" attribute.")
                 }
             } else {
@@ -52,11 +45,7 @@ impl ContractArgs {
             }
         }
 
-        let response = parser.require("response");
-        parser.finalize();
-        
         Self {
-            response,
             components
         }
     }

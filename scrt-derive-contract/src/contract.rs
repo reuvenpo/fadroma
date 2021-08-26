@@ -1,8 +1,8 @@
 use syn::{
-    TraitItemMethod, Path, AttributeArgs, ItemTrait,
-    TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum,
+    TraitItemMethod, Path, AttributeArgs, ItemTrait, Meta, Lit,
+    TraitItem, AttrStyle, ReturnType, Type, Ident, ItemEnum, TypePath,
     Variant, FnArg, FieldsNamed, Field, Visibility, Pat, Fields,
-    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField,
+    ItemStruct, ItemFn, Stmt, Expr, ExprMatch, ExprField, NestedMeta,
     GenericArgument, PathArguments, parse_quote
 };
 use syn::token::{Comma, Brace, Colon};
@@ -22,6 +22,7 @@ macro_rules! default_impl_ident {
 const INIT_MSG: &str = "InitMsg";
 const HANDLE_MSG: &str = "HandleMsg";
 const QUERY_MSG: &str = "QueryMsg";
+const RESPONSE_MSG: &str = "QueryResponse";
 const CONTRACT_ARG: &str = "contract";
 
 pub struct Contract {
@@ -80,19 +81,19 @@ impl Contract {
                         "init" => {
                             assert!(init.is_none(), "Only one method can be annotated as #[init].");
     
-                            validate_method(&method, &parse_quote!(InitResponse), ty);
+                            validate_method(&method, Some(parse_quote!(InitResponse)), ty);
                             init = Some(method);
     
                             break;
                         },
                         "handle" => {
-                            validate_method(&method, &parse_quote!(HandleResponse), ty);
+                            validate_method(&method, Some(parse_quote!(HandleResponse)), ty);
                             handle.push(method);
     
                             break;
                         },
                         "query" => {
-                            validate_method(&method, &args.response, ty);
+                            validate_method(&method, None, ty);
                             query.push(method);
     
                             break;
@@ -117,12 +118,14 @@ impl Contract {
         let init_msg = self.generate_init_msg();
         let handle_msg = self.generate_messages(MsgType::Handle);
         let query_msg = self.generate_messages(MsgType::Query);
+        let query_response = self.generate_response_msg();
 
         if let ContractType::Interface = self.ty {
             return quote! {
                 #init_msg
                 #handle_msg
                 #query_msg
+                #query_response
             };
         }
 
@@ -137,6 +140,7 @@ impl Contract {
             #init_msg
             #handle_msg
             #query_msg
+            #query_response
             #init
             #handle
             #query
@@ -182,6 +186,50 @@ impl Contract {
             });
         }
         
+        result
+    }
+
+    fn generate_response_msg(&self) -> ItemEnum {
+        let enum_name = Ident::new(RESPONSE_MSG, Span::call_site());
+
+        let mut result: ItemEnum = parse_quote!{
+            #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+            #[serde(rename_all = "snake_case")]
+            pub enum #enum_name {
+
+            }
+        };
+
+        for method in &self.query {
+            let variant_name = to_pascal(&method.sig.ident.to_string());
+            let mut field_name = None;
+
+            for attr in &method.attrs {
+                if let Ok(meta) = attr.parse_meta() {
+                    if let Meta::List(meta_list) = meta {
+                        assert!(meta_list.nested.len() == 1, "Expected 1 string literal argument in \"query\" attribute.");
+
+                        if let NestedMeta::Lit(lit) = meta_list.nested.first().unwrap() {
+                            if let Lit::Str(name) = lit {
+                                field_name = Some(name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            let field_name = field_name.expect("Expected 1 string literal argument in \"query\" attribute.");
+            let field_name = Ident::new(&field_name.value(), Span::call_site());
+            let result_ty = extract_std_result_type(&method.sig.output);
+
+            result.variants.push(Variant {
+                attrs: vec![],
+                ident: Ident::new(&variant_name, Span::call_site()),
+                fields: Fields::Named(parse_quote!({ #field_name: #result_ty })),
+                discriminant: None
+            });
+        }
+
         result
     }
 
@@ -347,12 +395,26 @@ fn extract_fields(method: &TraitItemMethod) -> Fields {
     Fields::Named(fields)
 }
 
-fn validate_method(method: &TraitItemMethod, path: &Path, contract_type: ContractType) {
+fn validate_method(method: &TraitItemMethod, expected: Option<Path>, contract_type: ContractType) {
     if let ContractType::Interface = contract_type {
         assert!(method.default.is_none(), "Contract interface method cannot contain a default implementation.");
     }
 
-    if let ReturnType::Type(_, return_type) = &method.sig.output {
+    let result_ty = extract_std_result_type(&method.sig.output);
+
+    if let Some(path) = &expected {
+        let ref generic_ident = result_ty.path.segments.last().unwrap().ident;
+        let ref expected = path.segments.last().unwrap().ident;
+        
+        if *generic_ident != *expected {
+            let expected_type = format!("{}", quote!{ #expected });
+            panic!("Expecting return type: StdResult<{}>", expected_type);
+        }
+    }
+}
+
+fn extract_std_result_type(return_ty: &ReturnType) -> &TypePath {
+    if let ReturnType::Type(_, return_type) = return_ty {
         if let Type::Path(return_type_path) = return_type.as_ref() {
             assert!(return_type_path.qself.is_none(), "Unexpected \"Self\" in return type.");
 
@@ -362,12 +424,7 @@ fn validate_method(method: &TraitItemMethod, path: &Path, contract_type: Contrac
                 if let PathArguments::AngleBracketed(args) = &last.arguments {
                     if let GenericArgument::Type(ty) =  &args.args[0] {
                         if let Type::Path(generic_path) = ty {
-                            let ref generic_ident = generic_path.path.segments.last().unwrap().ident;
-                            let ref expected = path.segments.last().unwrap().ident;
-                            
-                            if *generic_ident == *expected {
-                                return;
-                            }
+                            return generic_path;
                         }
                     }
                 }
@@ -375,8 +432,7 @@ fn validate_method(method: &TraitItemMethod, path: &Path, contract_type: Contrac
         }
     }
 
-    let expected_type = format!("{}", quote!{ #path });
-    panic!("Expecting return type: StdResult<{}>", expected_type);
+    panic!("Expecting return type: StdResult<T>")
 }
 
 fn extract_fn_arg_ident(arg: &FnArg) -> Ident {
