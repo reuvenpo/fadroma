@@ -261,21 +261,7 @@ impl Contract {
                 }
             };
     
-            let mut fields = extract_fields(&init);
-    
-            for component in self.args.init_components() {
-                fields.named.push(Field {
-                    attrs: vec![],
-                    vis: parse_quote!(pub),
-                    ident: Some(component.mod_ident(false)),
-                    ty: Type::Path(TypePath {
-                        qself: None,
-                        path: component.path_concat(&msg)
-                    }),
-                    colon_token: Some(Colon(Span::call_site()))
-                });
-            }
-    
+            let fields = extract_fields(&init);
             result.fields = Fields::Named(fields);
     
             return quote!(#result);

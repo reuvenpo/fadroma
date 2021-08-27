@@ -20,7 +20,6 @@ pub struct ContractArgs {
 pub struct Component {
     pub path: Path,
     custom_impl: Option<Path>,
-    skip_init: bool,
     skip_handle: bool,
     skip_query: bool,
 }
@@ -58,10 +57,6 @@ impl ContractArgs {
         }
     }
 
-    pub fn init_components(&self) -> impl Iterator<Item = &Component> {
-        self.components.iter().filter(|x| !x.skip_init)
-    }
-
     pub fn handle_components(&self) -> impl Iterator<Item = &Component> {
         self.components.iter().filter(|x| !x.skip_handle)
     }
@@ -73,7 +68,6 @@ impl ContractArgs {
 
 impl Component {
     pub fn parse(nested: Punctuated<NestedMeta, Comma>) -> Self {
-        let mut skip_init = false;
         let mut skip_handle = false;
         let mut skip_query = false;
 
@@ -97,7 +91,6 @@ impl Component {
                                                 let skipable = extract_path_ident_name(&skip_arg);
 
                                                 match skipable.as_str() {
-                                                    "init" => skip_init = true,
                                                     "handle" => skip_handle = true,
                                                     "query" => skip_query = true,
                                                     _ => panic!("Unexpected argument in \"skip\" attribute: \"{}\"", skipable)
@@ -123,7 +116,6 @@ impl Component {
         Self {
             path,
             custom_impl,
-            skip_init,
             skip_handle,
             skip_query
         }
