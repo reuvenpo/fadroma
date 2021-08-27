@@ -462,6 +462,14 @@ impl ContractType {
 
         false
     }
+
+    pub fn is_interface(self) -> bool {
+        if let ContractType::Interface = self {
+            return true;
+        }
+
+        false
+    }
 }
 
 fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> FieldsNamed {

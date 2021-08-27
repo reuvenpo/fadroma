@@ -42,7 +42,7 @@ impl ContractArgs {
                         let name = segment.ident.to_string();
 
                         if name == "component" {
-                            components.push(Component::parse(list.nested))
+                            components.push(Component::parse(list.nested, ty))
                         } else {
                             panic!("Unexpected attribute: \"{}\"", name);
                         }
@@ -89,7 +89,7 @@ impl ContractArgs {
 }
 
 impl Component {
-    pub fn parse(nested: Punctuated<NestedMeta, Comma>) -> Self {
+    pub fn parse(nested: Punctuated<NestedMeta, Comma>, ty: ContractType) -> Self {
         let mut skip_handle = false;
         let mut skip_query = false;
 
@@ -133,6 +133,11 @@ impl Component {
 
         let path = parser.require("path");
         let custom_impl = parser.get("custom_impl");
+
+        if ty.is_interface() && custom_impl.is_some() {
+            panic!("Interfaces cannot have the \"custom_impl\" attribute. Specify this on the implementing trait instead.");
+        }
+
         parser.finalize();
 
         Self {
