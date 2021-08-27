@@ -33,9 +33,10 @@ pub mod string_component {
 pub mod number_interface {
     use super::*;
 
-    #[interface(component(path = "string_component", skip(handle)))]
+    #[interface(component(path = "string_component"))]
     pub trait NumberInterface {
-        fn new(number: u8) -> StdResult<InitResponse>;
+        #[init]
+        fn new(number: u8, string: String) -> StdResult<InitResponse>;
 
         #[handle]
         fn set_number(number: u8) -> StdResult<HandleResponse>;
@@ -51,7 +52,9 @@ pub mod number_contract {
 
     const KEY_NUMBER: &[u8] = b"number_data";
 
-    #[contract(component(path = "string_component", skip(handle)))]
+    #[contract_impl(path = "number_interface",
+        component(path = "string_component")
+    )]
     pub trait NumberContract {
         #[init]
         fn new(number: u8, string: String) -> StdResult<InitResponse> {
@@ -73,6 +76,84 @@ pub mod number_contract {
             let value = deps.storage.get(KEY_NUMBER).unwrap();
 
             from_slice(&value)
+        }
+    }
+}
+
+mod tests {
+    use cosmwasm_std::{Storage, Api, Querier, Extern, from_binary};
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
+
+    use super::string_component;
+    use super::number_contract::{init, handle, query, DefaultImpl};
+    use super::number_interface::{InitMsg, HandleMsg, QueryMsg, QueryResponse};
+
+    #[test]
+    fn contract_functions() {
+        let ref mut deps = mock_dependencies(20, &[]);
+        let env = mock_env("sender", &[]);
+
+        let string = String::from("test");
+        let number = 5;
+
+        let msg = InitMsg {
+            string: string.clone(),
+            number
+        };
+
+        init(deps, env.clone(), msg, DefaultImpl).unwrap();
+
+        test_queries(deps, number, string);
+
+        let string = String::from("test_2");
+        let number = 10;
+
+        handle(deps, env.clone(), HandleMsg::SetNumber { number }, DefaultImpl).unwrap();
+        handle(
+            deps,
+            env,
+            HandleMsg::StringComponent(
+                string_component::HandleMsg::SetString {
+                    string: string.clone()
+                }
+            ),
+            DefaultImpl
+        )
+        .unwrap();
+
+        test_queries(deps, number, string);
+    }
+
+    fn test_queries<S: Storage, A: Api, Q: Querier>(
+        deps: &Extern<S,A,Q>,
+        expected_num: u8,
+        expected_str: String
+    ) {
+        let result = query(deps, QueryMsg::GetNumber { }, DefaultImpl).unwrap();
+        let result: QueryResponse = from_binary(&result).unwrap();
+
+        match result {
+            QueryResponse::GetNumber { number } => {
+                assert_eq!(number, expected_num);
+            }
+            _ => panic!("Expected QueryResponse::GetNumber")
+        }
+
+        let result = query(
+            deps,
+            QueryMsg::StringComponent(
+                string_component::QueryMsg::GetString { }
+            ),
+            DefaultImpl
+        ).unwrap();
+
+        let result: QueryResponse = from_binary(&result).unwrap();
+
+        match result {
+            QueryResponse::StringComponent(string_component::QueryResponse::GetString { string }) => {
+                assert_eq!(string, expected_str);
+            }
+            _ => panic!("Expected QueryMsg::StringComponent(GetString)")
         }
     }
 }

@@ -51,7 +51,7 @@ enum MsgType {
 }
 
 impl MsgType {
-    pub fn to_ident(&self) -> Ident {
+    pub fn to_ident(self) -> Ident {
         match self {
             Self::Handle => Ident::new(HANDLE_MSG, Span::call_site()),
             Self::Query => Ident::new(QUERY_MSG, Span::call_site())
@@ -61,7 +61,7 @@ impl MsgType {
 
 impl Contract {
     pub fn parse(args: AttributeArgs, item_trait: ItemTrait, ty: ContractType) -> Self {
-        let args = ContractArgs::parse(args);
+        let args = ContractArgs::parse(args, ty);
         
         let mut init = None;
         let mut handle = vec![];
@@ -115,35 +115,57 @@ impl Contract {
     }
 
     pub fn generate_boilerplate(&self) -> TokenStream {
-        let init_msg = self.generate_init_msg();
-        let handle_msg = self.generate_messages(MsgType::Handle);
-        let query_msg = self.generate_messages(MsgType::Query);
-        let query_response = self.generate_response_msg();
+        match self.ty {
+            ContractType::Contract => {
+                let init_msg = self.generate_init_msg();
+                let handle_msg = self.generate_messages(MsgType::Handle);
+                let query_msg = self.generate_messages(MsgType::Query);
+                let query_response = self.generate_response_msg();
 
-        if let ContractType::Interface = self.ty {
-            return quote! {
-                #init_msg
-                #handle_msg
-                #query_msg
-                #query_response
-            };
-        }
+                let struct_impl = self.generate_default_impl();
 
-        let struct_impl = self.generate_default_impl();
+                let init = self.generate_init_fn();
+                let handle = self.generate_handle_fn();
+                let query = self.generate_query_fn();
 
-        let init = self.generate_init_fn();
-        let handle = self.generate_handle_fn();
-        let query = self.generate_query_fn();
+                quote! {
+                    #struct_impl
+                    #init_msg
+                    #handle_msg
+                    #query_msg
+                    #query_response
+                    #init
+                    #handle
+                    #query
+                }
+            },
+            ContractType::Interface => {
+                let init_msg = self.generate_init_msg();
+                let handle_msg = self.generate_messages(MsgType::Handle);
+                let query_msg = self.generate_messages(MsgType::Query);
+                let query_response = self.generate_response_msg();
+        
+                quote! {
+                    #init_msg
+                    #handle_msg
+                    #query_msg
+                    #query_response
+                }
+            },
+            ContractType::Impl => {
+                let struct_impl = self.generate_default_impl();
 
-        quote! {
-            #struct_impl
-            #init_msg
-            #handle_msg
-            #query_msg
-            #query_response
-            #init
-            #handle
-            #query
+                let init = self.generate_init_fn();
+                let handle = self.generate_handle_fn();
+                let query = self.generate_query_fn();
+        
+                quote! {
+                    #struct_impl
+                    #init
+                    #handle
+                    #query
+                }
+            }
         }
     }
 
@@ -152,6 +174,7 @@ impl Contract {
         let ref trait_ident = self.ident;
 
         quote! {
+            #[derive(Clone, Copy)]
             pub struct #struct_ident;
 
             impl #trait_ident for #struct_ident { }
@@ -176,7 +199,7 @@ impl Contract {
 
         for method in methods {
             let variant_name = to_pascal(&method.sig.ident.to_string());
-            let fields = extract_fields(method);
+            let fields = extract_fields(method, Visibility::Inherited);
 
             result.variants.push(Variant {
                 attrs: vec![],
@@ -215,24 +238,7 @@ impl Contract {
 
         for method in &self.query {
             let variant_name = to_pascal(&method.sig.ident.to_string());
-            let mut field_name = None;
-
-            for attr in &method.attrs {
-                if let Ok(meta) = attr.parse_meta() {
-                    if let Meta::List(meta_list) = meta {
-                        assert!(meta_list.nested.len() == 1, "Expected 1 string literal argument in \"query\" attribute.");
-
-                        if let NestedMeta::Lit(lit) = meta_list.nested.first().unwrap() {
-                            if let Lit::Str(name) = lit {
-                                field_name = Some(name.clone());
-                            }
-                        }
-                    }
-                }
-            }
-
-            let field_name = field_name.expect("Expected 1 string literal argument in \"query\" attribute.");
-            let field_name = Ident::new(&field_name.value(), Span::call_site());
+            let field_name = extract_query_name_ident(&method);
             let result_ty = extract_std_result_type(&method.sig.output);
 
             result.variants.push(Variant {
@@ -261,7 +267,7 @@ impl Contract {
                 }
             };
     
-            let fields = extract_fields(&init);
+            let fields = extract_fields(&init, parse_quote!(pub));
             result.fields = Fields::Named(fields);
     
             return quote!(#result);
@@ -272,7 +278,7 @@ impl Contract {
     
     fn generate_init_fn(&self) -> TokenStream {
         if let Some(init) = &self.init {
-            let msg = Ident::new(INIT_MSG, Span::call_site());
+            let msg = self.args.interface_path_concat(&Ident::new(INIT_MSG, Span::call_site()));
             let fn_name = Ident::new(INIT_FN, Span::call_site());
             let arg = self.create_trait_arg();
     
@@ -307,7 +313,7 @@ impl Contract {
     }
     
     fn generate_handle_fn(&self) -> ItemFn {
-        let msg = MsgType::Handle.to_ident();
+        let msg = self.args.interface_path_concat(&MsgType::Handle.to_ident());
         let arg = self.create_trait_arg();
         let fn_name = Ident::new(HANDLE_FN, Span::call_site());
 
@@ -327,9 +333,11 @@ impl Contract {
     }
 
     fn generate_query_fn(&self) -> ItemFn {
-        let msg = MsgType::Query.to_ident();
+        let msg = self.args.interface_path_concat(&MsgType::Query.to_ident());
         let arg = self.create_trait_arg();
         let fn_name = Ident::new(QUERY_FN, Span::call_site());
+
+        let match_expr = self.create_match_expr(MsgType::Query);
 
         let mut result: ItemFn = parse_quote! {
             pub fn #fn_name<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
@@ -339,7 +347,7 @@ impl Contract {
             ) -> cosmwasm_std::QueryResult { }
         };
 
-        let match_expr = self.create_match_expr(MsgType::Query);
+        
         result.block.stmts.push(Stmt::Expr(match_expr));
 
         result
@@ -351,7 +359,10 @@ impl Contract {
             MsgType::Query => &self.query
         };
 
-        let enum_name = msg_type.to_ident();
+        let enum_name = self.args.interface_path_concat(&msg_type.to_ident());
+        let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
+        let response_enum = self.args.interface_path_concat(&Ident::new(RESPONSE_MSG, Span::call_site()));
+
         let mut match_expr: ExprMatch = parse_quote!(match msg {});
 
         for method in methods {
@@ -368,8 +379,6 @@ impl Contract {
                 args.push_punct(Comma(Span::call_site()));
             }
 
-            let arg_name = Ident::new(CONTRACT_ARG, Span::call_site());
-
             match msg_type {
                 MsgType::Handle => {
                     match_expr.arms.push(
@@ -377,8 +386,21 @@ impl Contract {
                     );
                 },
                 MsgType::Query => {
+                    let field_name = extract_query_name_ident(&method);
+
+                    let variant_name = to_pascal(&method.sig.ident.to_string());
+                    let variant_name = Ident::new(&variant_name, Span::call_site());
+
                     match_expr.arms.push(
-                        parse_quote!(#enum_name::#variant { #args } => cosmwasm_std::to_binary(&#arg_name.#method_name(#args deps)?))
+                        parse_quote! {
+                            #enum_name::#variant { #args } => { 
+                                let result = #arg_name.#method_name(#args deps)?;
+
+                                cosmwasm_std::to_binary(&#response_enum::#variant_name {
+                                    #field_name: result
+                                })
+                            }
+                        }
                     );
                 }
             }
@@ -404,8 +426,18 @@ impl Contract {
                     let impl_struct = component.create_impl_struct();
                     let query_fn = Ident::new(QUERY_FN, Span::call_site());
 
+                    let component_response = component.path_concat(&Ident::new(RESPONSE_MSG, Span::call_site()));
+
+                    // TODO: This is really stupid and inefficient.
+                    // Is there a way to serialize just once?
                     match_expr.arms.push(
-                        parse_quote!(#enum_name::#mod_name(msg) => #mod_path::#query_fn(deps, msg, #impl_struct))
+                        parse_quote! {
+                            #enum_name::#mod_name(msg) => {
+                                let result: #component_response = cosmwasm_std::from_binary(&#mod_path::#query_fn(deps, msg, #impl_struct)?)?;
+
+                                cosmwasm_std::to_binary(&#response_enum::#mod_name(result))
+                            }
+                        }
                     );
                 }
             }
@@ -422,7 +454,17 @@ impl Contract {
     }
 }
 
-fn extract_fields(method: &TraitItemMethod) -> FieldsNamed {
+impl ContractType {
+    pub fn is_impl(self) -> bool {
+        if let ContractType::Impl = self {
+            return true;
+        }
+
+        false
+    }
+}
+
+fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> FieldsNamed {
     let mut fields = FieldsNamed {
         brace_token: Brace(Span::call_site()),
         named: Punctuated::<Field, Comma>::default()
@@ -438,7 +480,7 @@ fn extract_fields(method: &TraitItemMethod) -> FieldsNamed {
 
                 fields.named.push(Field {
                     attrs: vec![],
-                    vis: Visibility::Inherited,
+                    vis: vis.clone(),
                     ident: Some(ident),
                     ty: *pat_type.ty.to_owned(),
                     colon_token: Some(Colon(Span::call_site()))
@@ -506,4 +548,26 @@ fn extract_fn_arg_ident(arg: &FnArg) -> Ident {
         },
         FnArg::Receiver(_) => panic!("Method definition cannot contain \"self\"")
     }
+}
+
+fn extract_query_name_ident(method: &TraitItemMethod) -> Ident {
+    let mut field_name = None;
+
+    for attr in &method.attrs {
+        if let Ok(meta) = attr.parse_meta() {
+            if let Meta::List(meta_list) = meta {
+                assert!(meta_list.nested.len() == 1, "Expected 1 string literal argument in \"query\" attribute.");
+
+                if let NestedMeta::Lit(lit) = meta_list.nested.first().unwrap() {
+                    if let Lit::Str(name) = lit {
+                        field_name = Some(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let field_name = field_name.expect("Expected 1 string literal argument in \"query\" attribute.");
+
+    Ident::new(&field_name.value(), Span::call_site())
 }

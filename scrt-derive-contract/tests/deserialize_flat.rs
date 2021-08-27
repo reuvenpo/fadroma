@@ -34,7 +34,7 @@ fn test_nested_enum() {
 
     assert_eq!(result, expected);
 }
-
+/*
 #[test]
 fn test_named() {
     let expected = TestMsg::A { one: 1, two: 2 };
@@ -44,3 +44,4 @@ fn test_named() {
 
     assert_eq!(result, expected);
 }
+*/

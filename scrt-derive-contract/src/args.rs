@@ -10,11 +10,12 @@ use syn::punctuated::Punctuated;
 use syn::parse::Parse;
 use proc_macro2::Span;
 
-use crate::contract::DEFAULT_IMPL_STRUCT;
+use crate::contract::{DEFAULT_IMPL_STRUCT, ContractType};
 use crate::utils::to_pascal;
 
 pub struct ContractArgs {
-    components: Vec<Component>
+    components: Vec<Component>,
+    interface_path: Option<Path>
 }
 
 pub struct Component {
@@ -29,14 +30,15 @@ struct MetaNameValueParser {
 }
 
 impl ContractArgs {
-    pub fn parse(args: AttributeArgs) -> Self {
+    pub fn parse(args: AttributeArgs, ty: ContractType) -> Self {
         let mut components = vec![];
+        let mut parser = MetaNameValueParser::new();
 
         for arg in args {
             if let NestedMeta::Meta(meta) = arg {
                 match meta {
                     Meta::List(list) => {
-                        let segment = list.path.segments.first().expect("Expected path identifier.");
+                        let segment = list.path.segments.first().unwrap();
                         let name = segment.ident.to_string();
 
                         if name == "component" {
@@ -45,15 +47,27 @@ impl ContractArgs {
                             panic!("Unexpected attribute: \"{}\"", name);
                         }
                     },
-                    _ => panic!("Unexpected meta value in \"contract\" attribute.")
+                    Meta::NameValue(name_val) if ty.is_impl() => {
+                        parser.parse(name_val);
+                    }
+                    _ => panic!("Unexpected meta attribute.")
                 }
             } else {
                 panic!("Unexpected literal in \"contract\" attribute.");
             }
         }
 
+        let interface_path = if ty.is_impl() {
+            Some(parser.require("path"))
+        } else {
+            None
+        };
+
+        parser.finalize();
+
         Self {
-            components
+            components,
+            interface_path
         }
     }
 
@@ -63,6 +77,14 @@ impl ContractArgs {
 
     pub fn query_components(&self) -> impl Iterator<Item = &Component> {
         self.components.iter().filter(|x| !x.skip_query)
+    }
+
+    pub fn interface_path_concat(&self, ident: &Ident) -> Path {
+        if let Some(path) = &self.interface_path {
+            return parse_quote!(#path::#ident);
+        }
+
+        parse_quote!(#ident)
     }
 }
 
