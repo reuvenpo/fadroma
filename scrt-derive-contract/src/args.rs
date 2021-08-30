@@ -155,13 +155,13 @@ impl Component {
     }
 
     pub fn create_impl_struct(&self) -> Path {
-        let ref path = self.path;
-
         if let Some(custom_impl) = &self.custom_impl {
-            return parse_quote!(#path::#custom_impl);
+            return parse_quote!(#custom_impl);
         }
 
+        let ref path = self.path;
         let default = Ident::new(DEFAULT_IMPL_STRUCT, Span::call_site());
+        
         parse_quote!(#path::#default)
     }
 
