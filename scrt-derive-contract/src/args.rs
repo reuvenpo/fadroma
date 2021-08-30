@@ -8,6 +8,7 @@ use syn::{
 use syn::token::Comma;
 use syn::punctuated::Punctuated;
 use syn::parse::Parse;
+use syn::spanned::Spanned;
 use proc_macro2::Span;
 
 use crate::contract::{DEFAULT_IMPL_STRUCT, ContractType};
@@ -30,7 +31,7 @@ struct MetaNameValueParser {
 }
 
 impl ContractArgs {
-    pub fn parse(args: AttributeArgs, ty: ContractType) -> Self {
+    pub fn parse(args: AttributeArgs, ty: ContractType) -> syn::Result<Self> {
         let mut components = vec![];
         let mut parser = MetaNameValueParser::new();
 
@@ -42,33 +43,38 @@ impl ContractArgs {
                         let name = segment.ident.to_string();
 
                         if name == "component" {
-                            components.push(Component::parse(list.nested, ty))
+                            components.push(Component::parse(list.nested, ty)?)
                         } else {
-                            panic!("Unexpected attribute: \"{}\"", name);
+                            return Err(syn::Error::new(
+                                segment.span(),
+                                format!("Unexpected attribute: \"{}\"", name)
+                            ));
                         }
                     },
                     Meta::NameValue(name_val) if ty.is_impl() => {
-                        parser.parse(name_val);
+                        parser.parse(name_val)?;
                     }
-                    _ => panic!("Unexpected meta attribute.")
+                    _ => {
+                        return Err(syn::Error::new(meta.span(), "Unexpected meta attribute."));
+                    }
                 }
             } else {
-                panic!("Unexpected literal in \"contract\" attribute.");
+                return Err(syn::Error::new(arg.span(), "Unexpected literal in \"contract\" attribute."));
             }
         }
 
         let interface_path = if ty.is_impl() {
-            Some(parser.require("path"))
+            Some(parser.require("path")?)
         } else {
             None
         };
 
-        parser.finalize();
+        parser.finalize()?;
 
-        Self {
+        Ok(Self {
             components,
             interface_path
-        }
+        })
     }
 
     pub fn handle_components(&self) -> impl Iterator<Item = &Component> {
@@ -89,7 +95,7 @@ impl ContractArgs {
 }
 
 impl Component {
-    pub fn parse(nested: Punctuated<NestedMeta, Comma>, ty: ContractType) -> Self {
+    pub fn parse(nested: Punctuated<NestedMeta, Comma>, ty: ContractType) -> syn::Result<Self> {
         let mut skip_handle = false;
         let mut skip_query = false;
 
@@ -100,7 +106,7 @@ impl Component {
                 NestedMeta::Meta(meta) => {
                     match meta {
                         Meta::NameValue(name_val) => {
-                            parser.parse(name_val);
+                            parser.parse(name_val)?;
                         },
                         Meta::List(list) => {
                             let name = extract_path_ident_name(&list.path);
@@ -115,37 +121,54 @@ impl Component {
                                                 match skipable.as_str() {
                                                     "handle" => skip_handle = true,
                                                     "query" => skip_query = true,
-                                                    _ => panic!("Unexpected argument in \"skip\" attribute: \"{}\"", skipable)
+                                                    _ =>{
+                                                        return Err(syn::Error::new(
+                                                            skip_arg.span(),
+                                                            format!("Unexpected argument in \"skip\" attribute: \"{}\"", skipable)
+                                                        ));
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 },
-                                _ => panic!("Unexpected attribute: \"{}\"", name)
+                                _ =>{
+                                    return Err(syn::Error::new(
+                                        list.span(),
+                                        format!("Unexpected attribute: \"{}\"", name)
+                                    ));
+                                }
                             }
                         },
-                        Meta::Path(_) => panic!("Unexpected meta path in attribute.")
+                        Meta::Path(path) => {
+                            return Err(syn::Error::new(path.span(), "Unexpected meta path in attribute."));
+                        }
                     }
                 },
-                NestedMeta::Lit(_) => panic!("Unexpected literal in attribute.")
+                NestedMeta::Lit(lit) =>{
+                    return Err(syn::Error::new(lit.span(), "Unexpected literal in attribute."));
+                }
             }
         }
 
-        let path = parser.require("path");
-        let custom_impl = parser.get("custom_impl");
+        let path = parser.require("path")?;
+        let custom_impl = parser.get("custom_impl")?;
 
         if ty.is_interface() && custom_impl.is_some() {
-            panic!("Interfaces cannot have the \"custom_impl\" attribute. Specify this on the implementing trait instead.");
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "Interfaces cannot have the \"custom_impl\" attribute. Specify this on the implementing trait instead.")
+            );
         }
 
-        parser.finalize();
+        parser.finalize()?;
 
-        Self {
+        Ok(Self {
             path,
             custom_impl,
             skip_handle,
             skip_query
-        }
+        })
     }
 
     pub fn path_concat(&self, ident: &Ident) -> Path {
@@ -190,42 +213,61 @@ impl MetaNameValueParser {
         }
     }
 
-    pub fn parse(&mut self, name_val: MetaNameValue) {
+    pub fn parse(&mut self, name_val: MetaNameValue) -> syn::Result<()> {
         let name = extract_path_ident_name(&name_val.path);
 
         match name_val.lit {
             Lit::Str(val) => {
                 if self.entries.contains_key(&name) {
-                    panic!("Duplicate \"{}\" attribute.", name)
+                    return Err(syn::Error::new(
+                        val.span(),
+                        format!("Duplicate \"{}\" attribute.", name)
+                    ));
                 }
 
                 self.entries.insert(name, val);
             },
-            _ => panic!("Expected string literal for \"{}\".", name)
+            _ => {
+                return Err(syn::Error::new(
+                    name_val.span(),
+                    format!("Expected string literal for \"{}\".", name)
+                ));
+            }
         }
+
+        Ok(())
     }
 
-    pub fn require<T: Parse>(&mut self, name: &str) -> T {
+    pub fn require<T: Parse>(&mut self, name: &str) -> syn::Result<T> {
         if let Some(value) = self.entries.remove(name) {
-            value.parse().unwrap()
+            value.parse()
         } else {
-            panic!("Expected attribute: \"{}\"", name)
+            Err(syn::Error::new(
+                Span::call_site(), 
+                format!("Expected attribute: \"{}\"", name)
+            ))
         }
     }
 
-    pub fn get<T: Parse>(&mut self, name: &str) -> Option<T> {
+    pub fn get<T: Parse>(&mut self, name: &str) -> syn::Result<Option<T>> {
         if let Some(value) = self.entries.remove(name) {
-            Some(value.parse().unwrap())
+            value.parse().map(|x| Some(x))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn finalize(mut self) {
+    pub fn finalize(mut self) -> syn::Result<()> {
         if self.entries.len() > 0 {
             let unexpected: Vec<String> = self.entries.drain().map(|x| x.0).collect();
-            panic!("Unexpected atrributes: {}", unexpected.join(", "))
+
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!("Unexpected atrributes: {}", unexpected.join(", "))
+            ));
         }
+
+        Ok(())
     }
 }
 

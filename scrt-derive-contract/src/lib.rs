@@ -93,7 +93,13 @@ fn generate_contract(
     let item_trait = quote!(#ast);
 
     let contract = Contract::parse(args, ast, ty);
-    let boilerplate = contract.generate_boilerplate();
+
+    let boilerplate = match contract {
+        Ok(contract) => {
+            contract.generate_boilerplate().unwrap_or_else(|x| x.into_compile_error())
+        },
+        Err(err) => err.to_compile_error()
+    };
 
     let result = quote! {
         #item_trait

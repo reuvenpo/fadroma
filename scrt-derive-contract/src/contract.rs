@@ -7,6 +7,7 @@ use syn::{
 };
 use syn::token::{Comma, Brace, Colon};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use quote::quote;
 use proc_macro2::{TokenStream, Span};
 
@@ -60,8 +61,8 @@ impl MsgType {
 }
 
 impl Contract {
-    pub fn parse(args: AttributeArgs, item_trait: ItemTrait, ty: ContractType) -> Self {
-        let args = ContractArgs::parse(args, ty);
+    pub fn parse(args: AttributeArgs, item_trait: ItemTrait, ty: ContractType) -> syn::Result<Self> {
+        let args = ContractArgs::parse(args, ty)?;
         
         let mut init = None;
         let mut handle = vec![];
@@ -71,29 +72,31 @@ impl Contract {
             if let TraitItem::Method(method) = item {
                 for attr in method.attrs.iter() {
                     if let AttrStyle::Inner(_) = attr.style {
-                        panic!("Invalid attribute style")
+                        return Err(syn::Error::new(attr.span(), "Invalid attribute style"));
                     }
 
-                    let ref path = attr.path.segments.last().unwrap();
-                    let path = format!("{}", quote!{ #path });
+                    let ref segment = attr.path.segments.last().unwrap();
+                    let path = format!("{}", quote!{ #segment });
     
                     match path.as_str() {
                         "init" => {
-                            assert!(init.is_none(), "Only one method can be annotated as #[init].");
-    
-                            validate_method(&method, Some(parse_quote!(InitResponse)), ty);
+                            if init.is_some() {
+                                return Err(syn::Error::new(segment.span(), "Only one method can be annotated as #[init]."));
+                            }
+
+                            validate_method(&method, Some(parse_quote!(InitResponse)), ty)?;
                             init = Some(method);
     
                             break;
                         },
                         "handle" => {
-                            validate_method(&method, Some(parse_quote!(HandleResponse)), ty);
+                            validate_method(&method, Some(parse_quote!(HandleResponse)), ty)?;
                             handle.push(method);
     
                             break;
                         },
                         "query" => {
-                            validate_method(&method, None, ty);
+                            validate_method(&method, None, ty)?;
                             query.push(method);
     
                             break;
@@ -104,31 +107,31 @@ impl Contract {
             }
         }
     
-        Self {
+        Ok(Self {
             ty,
             args,
             ident: item_trait.ident,
             init,
             handle,
             query
-        }    
+        })
     }
 
-    pub fn generate_boilerplate(&self) -> TokenStream {
+    pub fn generate_boilerplate(&self) -> syn::Result<TokenStream> {
         match self.ty {
             ContractType::Contract => {
-                let init_msg = self.generate_init_msg();
-                let handle_msg = self.generate_messages(MsgType::Handle);
-                let query_msg = self.generate_messages(MsgType::Query);
-                let query_response = self.generate_response_msg();
+                let init_msg = self.generate_init_msg()?;
+                let handle_msg = self.generate_messages(MsgType::Handle)?;
+                let query_msg = self.generate_messages(MsgType::Query)?;
+                let query_response = self.generate_response_msg()?;
 
                 let struct_impl = self.generate_default_impl();
 
-                let init = self.generate_init_fn();
-                let handle = self.generate_handle_fn();
-                let query = self.generate_query_fn();
+                let init = self.generate_init_fn()?;
+                let handle = self.generate_handle_fn()?;
+                let query = self.generate_query_fn()?;
 
-                quote! {
+                Ok(quote! {
                     #struct_impl
                     #init_msg
                     #handle_msg
@@ -137,34 +140,34 @@ impl Contract {
                     #init
                     #handle
                     #query
-                }
+                })
             },
             ContractType::Interface => {
-                let init_msg = self.generate_init_msg();
-                let handle_msg = self.generate_messages(MsgType::Handle);
-                let query_msg = self.generate_messages(MsgType::Query);
-                let query_response = self.generate_response_msg();
+                let init_msg = self.generate_init_msg()?;
+                let handle_msg = self.generate_messages(MsgType::Handle)?;
+                let query_msg = self.generate_messages(MsgType::Query)?;
+                let query_response = self.generate_response_msg()?;
         
-                quote! {
+                Ok(quote! {
                     #init_msg
                     #handle_msg
                     #query_msg
                     #query_response
-                }
+                })
             },
             ContractType::Impl => {
                 let struct_impl = self.generate_default_impl();
 
-                let init = self.generate_init_fn();
-                let handle = self.generate_handle_fn();
-                let query = self.generate_query_fn();
+                let init = self.generate_init_fn()?;
+                let handle = self.generate_handle_fn()?;
+                let query = self.generate_query_fn()?;
         
-                quote! {
+                Ok(quote! {
                     #struct_impl
                     #init
                     #handle
                     #query
-                }
+                })
             }
         }
     }
@@ -181,7 +184,7 @@ impl Contract {
         }
     }
 
-    fn generate_messages(&self, msg_type: MsgType) -> ItemEnum {
+    fn generate_messages(&self, msg_type: MsgType) -> syn::Result<ItemEnum> {
         let methods = match msg_type {
             MsgType::Handle => &self.handle,
             MsgType::Query => &self.query
@@ -199,7 +202,7 @@ impl Contract {
 
         for method in methods {
             let variant_name = to_pascal(&method.sig.ident.to_string());
-            let fields = extract_fields(method, Visibility::Inherited);
+            let fields = extract_fields(method, Visibility::Inherited)?;
 
             result.variants.push(Variant {
                 attrs: vec![],
@@ -222,10 +225,10 @@ impl Contract {
             }
         }
         
-        result
+        Ok(result)
     }
 
-    fn generate_response_msg(&self) -> ItemEnum {
+    fn generate_response_msg(&self) -> syn::Result<ItemEnum> {
         let enum_name = Ident::new(RESPONSE_MSG, Span::call_site());
 
         let mut result: ItemEnum = parse_quote!{
@@ -238,8 +241,8 @@ impl Contract {
 
         for method in &self.query {
             let variant_name = to_pascal(&method.sig.ident.to_string());
-            let field_name = extract_query_name_ident(&method);
-            let result_ty = extract_std_result_type(&method.sig.output);
+            let field_name = extract_query_name_ident(&method)?;
+            let result_ty = extract_std_result_type(&method.sig.output)?;
 
             result.variants.push(Variant {
                 attrs: vec![],
@@ -253,10 +256,10 @@ impl Contract {
             result.variants.push(component.create_enum_variant(RESPONSE_MSG));
         }
 
-        result
+        Ok(result)
     }
 
-    fn generate_init_msg(&self) -> TokenStream {
+    fn generate_init_msg(&self) -> syn::Result<TokenStream> {
         if let Some(init) = &self.init {
             let msg = Ident::new(INIT_MSG, Span::call_site());
 
@@ -267,16 +270,16 @@ impl Contract {
                 }
             };
     
-            let fields = extract_fields(&init, parse_quote!(pub));
+            let fields = extract_fields(&init, parse_quote!(pub))?;
             result.fields = Fields::Named(fields);
     
-            return quote!(#result);
+            return Ok(quote!(#result));
         }
 
-        TokenStream::new()
+        Ok(TokenStream::new())
     }
     
-    fn generate_init_fn(&self) -> TokenStream {
+    fn generate_init_fn(&self) -> syn::Result<TokenStream> {
         if let Some(init) = &self.init {
             let msg = self.args.interface_path_concat(&Ident::new(INIT_MSG, Span::call_site()));
             let fn_name = Ident::new(INIT_FN, Span::call_site());
@@ -296,7 +299,8 @@ impl Contract {
             let mut args = Punctuated::<ExprField, Comma>::new();
     
             for input in &init.sig.inputs {
-                let ident = extract_fn_arg_ident(input);
+                let ident = extract_fn_arg_ident(input)?;
+
                 args.push_value(parse_quote!(msg.#ident));
                 args.push_punct(Comma(Span::call_site()));
             }
@@ -306,13 +310,13 @@ impl Contract {
             let call: Expr = parse_quote!(#arg_name.#method_name(#args deps, env));
             result.block.stmts.push(Stmt::Expr(call));
     
-            return quote!(#result);
+            return Ok(quote!(#result));
         }
 
-        TokenStream::new()
+        Ok(TokenStream::new())
     }
     
-    fn generate_handle_fn(&self) -> ItemFn {
+    fn generate_handle_fn(&self) -> syn::Result<ItemFn> {
         let msg = self.args.interface_path_concat(&MsgType::Handle.to_ident());
         let arg = self.create_trait_arg();
         let fn_name = Ident::new(HANDLE_FN, Span::call_site());
@@ -326,19 +330,19 @@ impl Contract {
             ) -> StdResult<cosmwasm_std::HandleResponse> { }
         };
 
-        let match_expr = self.create_match_expr(MsgType::Handle);
+        let match_expr = self.create_match_expr(MsgType::Handle)?;
         result.block.stmts.push(Stmt::Expr(match_expr));
         
-        result
+        Ok(result)
     }
 
-    fn generate_query_fn(&self) -> ItemFn {
+    fn generate_query_fn(&self) -> syn::Result<ItemFn> {
         let msg = self.args.interface_path_concat(&MsgType::Query.to_ident());
         let arg = self.create_trait_arg();
         let fn_name = Ident::new(QUERY_FN, Span::call_site());
         let response_enum = self.args.interface_path_concat(&Ident::new(RESPONSE_MSG, Span::call_site()));
 
-        let match_expr = self.create_match_expr(MsgType::Query);
+        let match_expr = self.create_match_expr(MsgType::Query)?;
 
         let mut result: ItemFn = parse_quote! {
             pub fn #fn_name<S: cosmwasm_std::Storage, A: cosmwasm_std::Api, Q: cosmwasm_std::Querier>(
@@ -351,10 +355,10 @@ impl Contract {
         
         result.block.stmts.push(Stmt::Expr(match_expr));
 
-        result
+        Ok(result)
     }
 
-    fn create_match_expr(&self, msg_type: MsgType) -> Expr {
+    fn create_match_expr(&self, msg_type: MsgType) -> syn::Result<Expr> {
         let methods = match msg_type {
             MsgType::Handle => &self.handle,
             MsgType::Query => &self.query
@@ -375,7 +379,8 @@ impl Contract {
             let mut args = Punctuated::<Ident, Comma>::new();
 
             for input in &method.sig.inputs {
-                let ident = extract_fn_arg_ident(input);
+                let ident = extract_fn_arg_ident(input)?;
+
                 args.push_value(ident);
                 args.push_punct(Comma(Span::call_site()));
             }
@@ -387,7 +392,7 @@ impl Contract {
                     );
                 },
                 MsgType::Query => {
-                    let field_name = extract_query_name_ident(&method);
+                    let field_name = extract_query_name_ident(&method)?;
 
                     let variant_name = to_pascal(&method.sig.ident.to_string());
                     let variant_name = Ident::new(&variant_name, Span::call_site());
@@ -442,7 +447,7 @@ impl Contract {
             }
         }
 
-        Expr::Match(match_expr)
+        Ok(Expr::Match(match_expr))
     }
     
     fn create_trait_arg(&self) -> FnArg {
@@ -471,7 +476,7 @@ impl ContractType {
     }
 }
 
-fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> FieldsNamed {
+fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> syn::Result<FieldsNamed> {
     let mut fields = FieldsNamed {
         brace_token: Brace(Span::call_site()),
         named: Punctuated::<Field, Comma>::default()
@@ -480,10 +485,7 @@ fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> FieldsNamed {
     for arg in method.sig.inputs.iter() {
         match arg {
             FnArg::Typed(pat_type) => {
-                let ident = match *pat_type.pat.to_owned() {
-                    Pat::Ident(pat_ident) => pat_ident.ident,
-                    _ => panic!("Expected identifier.")
-                };
+                let ident = require_pat_ident(*pat_type.pat.to_owned())?;
 
                 fields.named.push(Field {
                     attrs: vec![],
@@ -493,24 +495,36 @@ fn extract_fields(method: &TraitItemMethod, vis: Visibility) -> FieldsNamed {
                     colon_token: Some(Colon(Span::call_site()))
                 });
             },
-            FnArg::Receiver(_) => panic!("Method definition cannot contain \"self\"")
+            FnArg::Receiver(_) => {
+                return Err(syn::Error::new(arg.span(), "Method definition cannot contain \"self\""));
+            }
         }
     }
 
-    fields
+    Ok(fields)
 }
 
-fn validate_method(method: &TraitItemMethod, expected: Option<Path>, contract_type: ContractType) {
+fn validate_method(method: &TraitItemMethod, expected: Option<Path>, contract_type: ContractType) -> syn::Result<()> {
     match contract_type {
         ContractType::Interface => {
-            assert!(method.default.is_none(), "Contract interface method cannot contain a default implementation: \"{}\".", method.sig.ident);
+            if method.default.is_some() {
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!("Contract interface method cannot contain a default implementation: \"{}\".", method.sig.ident)
+                ));
+            }
         }
         _ => {
-            assert!(method.default.is_some(), "Contract method must contain a default implementation: \"{}\".", method.sig.ident);
+            if method.default.is_none() {
+                return Err(syn::Error::new(
+                    method.span(),
+                    format!("Contract method must contain a default implementation: \"{}\".", method.sig.ident)
+                ));
+            }
         }
     }
 
-    let result_ty = extract_std_result_type(&method.sig.output);
+    let result_ty = extract_std_result_type(&method.sig.output)?;
 
     if let Some(path) = &expected {
         let ref generic_ident = result_ty.path.segments.last().unwrap().ident;
@@ -518,15 +532,23 @@ fn validate_method(method: &TraitItemMethod, expected: Option<Path>, contract_ty
         
         if *generic_ident != *expected {
             let expected_type = format!("{}", quote!{ #expected });
-            panic!("Expecting return type: StdResult<{}>", expected_type);
+
+            return Err(syn::Error::new(
+                generic_ident.span(),
+                format!("Expecting return type: StdResult<{}>", expected_type)
+            ));
         }
     }
+
+    Ok(())
 }
 
-fn extract_std_result_type(return_ty: &ReturnType) -> &TypePath {
+fn extract_std_result_type(return_ty: &ReturnType) -> syn::Result<&TypePath> {
     if let ReturnType::Type(_, return_type) = return_ty {
         if let Type::Path(return_type_path) = return_type.as_ref() {
-            assert!(return_type_path.qself.is_none(), "Unexpected \"Self\" in return type.");
+            if return_type_path.qself.is_some() {
+                return Err(syn::Error::new(return_type_path.span(), "Unexpected \"Self\" in return type."));
+            }
 
             let last = return_type_path.path.segments.last().unwrap();
             
@@ -534,7 +556,7 @@ fn extract_std_result_type(return_ty: &ReturnType) -> &TypePath {
                 if let PathArguments::AngleBracketed(args) = &last.arguments {
                     if let GenericArgument::Type(ty) =  &args.args[0] {
                         if let Type::Path(generic_path) = ty {
-                            return generic_path;
+                            return Ok(generic_path);
                         }
                     }
                 }
@@ -542,29 +564,28 @@ fn extract_std_result_type(return_ty: &ReturnType) -> &TypePath {
         }
     }
 
-    panic!("Expecting return type: StdResult<T>")
+    Err(syn::Error::new(return_ty.span(), "Expecting return type: StdResult<T>"))
 }
 
-fn extract_fn_arg_ident(arg: &FnArg) -> Ident {
+fn extract_fn_arg_ident(arg: &FnArg) -> syn::Result<Ident> {
     match arg {
         FnArg::Typed(pat_type) => {
-            match *pat_type.pat.to_owned() {
-                Pat::Ident(pat_ident) => return pat_ident.ident,
-                _ => panic!("Expected identifier.")
-            };
+            require_pat_ident(*pat_type.pat.to_owned())
         },
-        FnArg::Receiver(_) => panic!("Method definition cannot contain \"self\"")
+        FnArg::Receiver(_) => Err(syn::Error::new(arg.span(), "Method definition cannot contain \"self\""))
     }
 }
 
-fn extract_query_name_ident(method: &TraitItemMethod) -> Ident {
+fn extract_query_name_ident(method: &TraitItemMethod) -> syn::Result<Ident> {
     let mut field_name = None;
 
     for attr in &method.attrs {
         if let Ok(meta) = attr.parse_meta() {
             if let Meta::List(meta_list) = meta {
-                assert!(meta_list.nested.len() == 1, "Expected 1 string literal argument in \"query\" attribute.");
-
+                if meta_list.nested.len() != 1 {
+                    return Err(syn::Error::new(meta_list.span(), "Expected 1 string literal argument in \"query\" attribute."));
+                }
+                
                 if let NestedMeta::Lit(lit) = meta_list.nested.first().unwrap() {
                     if let Lit::Str(name) = lit {
                         field_name = Some(name.clone());
@@ -574,7 +595,17 @@ fn extract_query_name_ident(method: &TraitItemMethod) -> Ident {
         }
     }
 
-    let field_name = field_name.expect("Expected 1 string literal argument in \"query\" attribute.");
+    if let Some(field_name) = field_name {
+        Ok(Ident::new(&field_name.value(), Span::call_site()))
+    } else {
+        Err(syn::Error::new(method.span(), "Expected 1 string literal argument in \"query\" attribute."))
+    }
+}
 
-    Ident::new(&field_name.value(), Span::call_site())
+fn require_pat_ident(pat: Pat) -> syn::Result<Ident> {
+    if let Pat::Ident(pat_ident) = pat {
+        Ok(pat_ident.ident)
+    } else {
+        return Err(syn::Error::new(pat.span(), "Expected identifier."));
+    }
 }
