@@ -1,4 +1,4 @@
-use cosmwasm_std::{StdResult, InitResponse, HandleResponse, Storage, to_vec, from_slice, from_binary};
+use cosmwasm_std::{StdResult, InitResponse, HandleResponse, Storage, to_vec, from_slice};
 use cosmwasm_std::testing::{mock_dependencies, mock_env};
 use scrt_derive_contract::*;
 use schemars;
@@ -42,7 +42,7 @@ impl string_component::StringComponent for CustomStringImpl {
     }
 }
 
-#[contract(component(path = "string_component", custom_impl = "CustomStringImpl"))]
+#[contract(component(path = "string_component", custom_impl = "CustomStringImpl", skip(handle)))]
 pub trait CustomImplContract {
     #[init]
     fn new(string: String) -> StdResult<InitResponse> {
@@ -70,8 +70,6 @@ fn uses_custom_impl() {
         ),
         DefaultImpl
     ).unwrap();
-
-    let result: QueryResponse = from_binary(&result).unwrap();
 
     match result {
         QueryResponse::StringComponent(string_component::QueryResponse::GetString { string }) => {

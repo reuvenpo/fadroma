@@ -336,6 +336,7 @@ impl Contract {
         let msg = self.args.interface_path_concat(&MsgType::Query.to_ident());
         let arg = self.create_trait_arg();
         let fn_name = Ident::new(QUERY_FN, Span::call_site());
+        let response_enum = self.args.interface_path_concat(&Ident::new(RESPONSE_MSG, Span::call_site()));
 
         let match_expr = self.create_match_expr(MsgType::Query);
 
@@ -344,7 +345,7 @@ impl Contract {
                 deps: &cosmwasm_std::Extern<S, A, Q>,
                 msg: #msg,
                 #arg
-            ) -> cosmwasm_std::QueryResult { }
+            ) -> cosmwasm_std::StdResult<#response_enum> { }
         };
 
         
@@ -396,7 +397,7 @@ impl Contract {
                             #enum_name::#variant { #args } => { 
                                 let result = #arg_name.#method_name(#args deps)?;
 
-                                cosmwasm_std::to_binary(&#response_enum::#variant_name {
+                                Ok(#response_enum::#variant_name {
                                     #field_name: result
                                 })
                             }
@@ -427,15 +428,13 @@ impl Contract {
                     let query_fn = Ident::new(QUERY_FN, Span::call_site());
 
                     let component_response = component.path_concat(&Ident::new(RESPONSE_MSG, Span::call_site()));
-
-                    // TODO: This is really stupid and inefficient.
-                    // Is there a way to serialize just once?
+                    
                     match_expr.arms.push(
                         parse_quote! {
                             #enum_name::#mod_name(msg) => {
-                                let result: #component_response = cosmwasm_std::from_binary(&#mod_path::#query_fn(deps, msg, #impl_struct)?)?;
+                                let result: #component_response = #mod_path::#query_fn(deps, msg, #impl_struct)?;
 
-                                cosmwasm_std::to_binary(&#response_enum::#mod_name(result))
+                                Ok(#response_enum::#mod_name(result))
                             }
                         }
                     );

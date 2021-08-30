@@ -81,7 +81,7 @@ pub mod number_contract {
 }
 
 mod tests {
-    use cosmwasm_std::{Storage, Api, Querier, Extern, from_binary};
+    use cosmwasm_std::{Storage, Api, Querier, Extern};
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
 
     use super::string_component;
@@ -130,7 +130,6 @@ mod tests {
         expected_str: String
     ) {
         let result = query(deps, QueryMsg::GetNumber { }, DefaultImpl).unwrap();
-        let result: QueryResponse = from_binary(&result).unwrap();
 
         match result {
             QueryResponse::GetNumber { number } => {
@@ -146,8 +145,6 @@ mod tests {
             ),
             DefaultImpl
         ).unwrap();
-
-        let result: QueryResponse = from_binary(&result).unwrap();
 
         match result {
             QueryResponse::StringComponent(string_component::QueryResponse::GetString { string }) => {
