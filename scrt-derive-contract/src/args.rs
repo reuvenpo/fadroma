@@ -109,14 +109,14 @@ impl Component {
                             parser.parse(name_val)?;
                         },
                         Meta::List(list) => {
-                            let name = extract_path_ident_name(&list.path);
+                            let name = extract_path_ident_name(&list.path)?;
 
                             match name.as_str() {
                                 "skip" => {
                                     for arg in list.nested {
                                         if let NestedMeta::Meta(meta) = arg {
                                             if let Meta::Path(skip_arg) = meta {
-                                                let skipable = extract_path_ident_name(&skip_arg);
+                                                let skipable = extract_path_ident_name(&skip_arg)?;
 
                                                 match skipable.as_str() {
                                                     "handle" => skip_handle = true,
@@ -214,7 +214,7 @@ impl MetaNameValueParser {
     }
 
     pub fn parse(&mut self, name_val: MetaNameValue) -> syn::Result<()> {
-        let name = extract_path_ident_name(&name_val.path);
+        let name = extract_path_ident_name(&name_val.path)?;
 
         match name_val.lit {
             Lit::Str(val) => {
@@ -271,10 +271,16 @@ impl MetaNameValueParser {
     }
 }
 
-fn extract_path_ident_name(path: &Path) -> String {
-    assert!(path.segments.len() == 1);
-    let name = path.segments.first().unwrap();
-    assert!(name.arguments == PathArguments::None);
+fn extract_path_ident_name(path: &Path) -> syn::Result<String> {
+    if path.segments.len() != 1 {
+        return Err(syn::Error::new(path.span(), "Single path element expected."));
+    }
 
-    name.ident.to_string()
+    let name = path.segments.first().unwrap();
+
+    if name.arguments != PathArguments::None {
+        return Err(syn::Error::new(path.span(), "Unexpected path arguments."));
+    }
+
+    Ok(name.ident.to_string())
 }
