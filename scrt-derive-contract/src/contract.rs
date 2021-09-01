@@ -75,7 +75,7 @@ impl Contract {
                         return Err(syn::Error::new(attr.span(), "Invalid attribute style"));
                     }
 
-                    let ref segment = attr.path.segments.last().unwrap();
+                    let segment = attr.path.segments.last().unwrap();
                     let path = format!("{}", quote!{ #segment });
     
                     match path.as_str() {
@@ -131,6 +131,8 @@ impl Contract {
                 let handle = self.generate_handle_fn()?;
                 let query = self.generate_query_fn()?;
 
+                let entry = self.generate_entry_points();
+
                 Ok(quote! {
                     #struct_impl
                     #init_msg
@@ -140,6 +142,7 @@ impl Contract {
                     #init
                     #handle
                     #query
+                    #entry
                 })
             },
             ContractType::Interface => {
@@ -161,12 +164,15 @@ impl Contract {
                 let init = self.generate_init_fn()?;
                 let handle = self.generate_handle_fn()?;
                 let query = self.generate_query_fn()?;
+
+                let entry = self.generate_entry_points();
         
                 Ok(quote! {
                     #struct_impl
                     #init
                     #handle
                     #query
+                    #entry
                 })
             }
         }
@@ -291,7 +297,7 @@ impl Contract {
                     env: cosmwasm_std::Env,
                     msg: #msg,
                     #arg
-                ) -> StdResult<InitResponse> { }
+                ) -> cosmwasm_std::StdResult<cosmwasm_std::InitResponse> { }
             };
     
             let ref method_name = init.sig.ident;
@@ -327,7 +333,7 @@ impl Contract {
                 env: cosmwasm_std::Env,
                 msg: #msg,
                 #arg
-            ) -> StdResult<cosmwasm_std::HandleResponse> { }
+            ) -> cosmwasm_std::StdResult<cosmwasm_std::HandleResponse> { }
         };
 
         let match_expr = self.create_match_expr(MsgType::Handle)?;
@@ -351,7 +357,6 @@ impl Contract {
                 #arg
             ) -> cosmwasm_std::StdResult<#response_enum> { }
         };
-
         
         result.block.stmts.push(Stmt::Expr(match_expr));
 
@@ -448,6 +453,85 @@ impl Contract {
         }
 
         Ok(Expr::Match(match_expr))
+    }
+
+    fn generate_entry_points(&self) -> TokenStream {
+        if !self.args.is_entry {
+            return TokenStream::new();
+        }
+
+        let init_fn = Ident::new(INIT_FN, Span::call_site());
+        let handle_fn = Ident::new(HANDLE_FN, Span::call_site());
+        let query_fn = Ident::new(QUERY_FN, Span::call_site());
+
+        let init_msg = self.args.interface_path_concat(&Ident::new(INIT_MSG, Span::call_site()));
+        let handle_msg = self.args.interface_path_concat(&MsgType::Handle.to_ident());
+        let query_msg = self.args.interface_path_concat(&MsgType::Query.to_ident());
+
+        parse_quote! {
+            #[cfg(target_arch = "wasm32")]
+            mod wasm {
+                use cosmwasm_std::{
+                    do_handle, do_init, do_query, ExternalApi, ExternalQuerier, ExternalStorage,
+                    QueryResult, to_binary, StdResult, InitResponse, HandleResponse, Storage, Api,
+                    Querier, Extern, Env
+                };
+
+                fn entry_init<S: Storage, A: Api, Q: Querier>(
+                    deps: &mut Extern<S, A, Q>,
+                    env: Env,
+                    msg: super::#init_msg,
+                ) -> StdResult<InitResponse> {
+                    super::#init_fn(deps, env, msg, super::DefaultImpl)
+                }
+
+                pub fn entry_handle<S: Storage, A: Api, Q: Querier>(
+                    deps: &mut Extern<S, A, Q>,
+                    env: Env,
+                    msg: super::#handle_msg,
+                ) -> StdResult<HandleResponse> {
+                    super::#handle_fn(deps, env, msg, super::DefaultImpl)
+                }
+
+                fn entry_query<S: Storage, A: Api, Q: Querier>(
+                    deps: &Extern<S, A, Q>,
+                    msg: super::#query_msg
+                ) -> StdResult<QueryResult> {
+                    let result = super::#query_fn(deps, msg, super::DefaultImpl)?;
+
+                    to_binary(&result)
+                }
+
+                #[no_mangle]
+                extern "C" fn init(env_ptr: u32, msg_ptr: u32) -> u32 {
+                    do_init(
+                        &entry_init::<ExternalStorage, ExternalApi, ExternalQuerier>,
+                        env_ptr,
+                        msg_ptr,
+                    )
+                }
+
+                #[no_mangle]
+                extern "C" fn handle(env_ptr: u32, msg_ptr: u32) -> u32 {
+                    do_handle(
+                        &entry_handle::<ExternalStorage, ExternalApi, ExternalQuerier>,
+                        env_ptr,
+                        msg_ptr,
+                    )
+                }
+
+                #[no_mangle]
+                extern "C" fn query(msg_ptr: u32) -> u32 {
+                    do_query(
+                        &entry_query::<ExternalStorage, ExternalApi, ExternalQuerier>,
+                        msg_ptr,
+                    )
+                }
+
+                // Other C externs like cosmwasm_vm_version_1, allocate, deallocate are available
+                // automatically because we `use cosmwasm_std`.
+            }
+        }
     }
     
     fn create_trait_arg(&self) -> FnArg {

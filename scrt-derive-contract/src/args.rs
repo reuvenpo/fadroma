@@ -15,6 +15,7 @@ use crate::contract::{DEFAULT_IMPL_STRUCT, ContractType};
 use crate::utils::to_pascal;
 
 pub struct ContractArgs {
+    pub is_entry: bool,
     components: Vec<Component>,
     interface_path: Option<Path>
 }
@@ -34,6 +35,7 @@ impl ContractArgs {
     pub fn parse(args: AttributeArgs, ty: ContractType) -> syn::Result<Self> {
         let mut components = vec![];
         let mut parser = MetaNameValueParser::new();
+        let mut is_entry = false;
 
         for arg in args {
             if let NestedMeta::Meta(meta) = arg {
@@ -54,6 +56,19 @@ impl ContractArgs {
                     Meta::NameValue(name_val) if ty.is_impl() => {
                         parser.parse(name_val)?;
                     }
+                    Meta::Path(path) if !ty.is_interface() => {
+                        let segment = path.segments.first().unwrap();
+                        let name = segment.ident.to_string();
+
+                        if name.as_str() == "entry" {
+                            is_entry = true;
+                        } else {
+                            return Err(syn::Error::new(
+                                segment.span(),
+                                format!("Unexpected attribute: \"{}\"", name)
+                            ));
+                        }
+                    },
                     _ => {
                         return Err(syn::Error::new(meta.span(), "Unexpected meta attribute."));
                     }
@@ -73,7 +88,8 @@ impl ContractArgs {
 
         Ok(Self {
             components,
-            interface_path
+            interface_path,
+            is_entry
         })
     }
 
