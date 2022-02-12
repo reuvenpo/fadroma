@@ -1,0 +1,1 @@
+initSidebarItems({"mod":[["admin",""],["permit",""],["vk",""],["vk_auth",""]]});

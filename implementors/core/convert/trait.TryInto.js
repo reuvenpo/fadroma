@@ -1,0 +1,3 @@
+(function() {var implementors = {};
+implementors["fadroma_math"] = [{"text":"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.58.1/core/convert/trait.TryInto.html\" title=\"trait core::convert::TryInto\">TryInto</a>&lt;<a class=\"struct\" href=\"secret_cosmwasm_std/math/struct.Uint128.html\" title=\"struct secret_cosmwasm_std::math::Uint128\">Uint128</a>&gt; for <a class=\"struct\" href=\"fadroma_math/uint256/struct.Uint256.html\" title=\"struct fadroma_math::uint256::Uint256\">Uint256</a>","synthetic":false,"types":["fadroma_math::uint256::Uint256"]}];
+if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

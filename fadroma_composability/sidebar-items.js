@@ -1,0 +1,1 @@
+initSidebarItems({"macro":[["make_composable",""]],"mod":[["composable","TODO:"],["composable_test",""],["dispatch",""],["response","note: see issue #35203 https://github.com/rust-lang/rust/issues/35203"]]});

@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["Harness","Reusable test harness with overridable post processing for init and tx response messages."]],"type":[["HandleFn",""],["InitFn",""],["QueryFn",""],["TxResult","Successful transaction return a vector of relevant messages and a count of any others"]]});

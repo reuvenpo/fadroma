@@ -1,0 +1,1 @@
+initSidebarItems({"macro":[["bind_js","A binding that exposes one or more wrapped Rust structs to JavaScript. This lets you load a WASM contract in a browser and talk to it from JS."]]});

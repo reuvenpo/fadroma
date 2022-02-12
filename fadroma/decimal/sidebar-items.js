@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["convert_token","Convert between tokens with different decimals."],["one_token","Get the amount needed to represent 1 whole token given its decimals. Ex. Given token A that has 3 decimals, 1 A == 1000"]]});

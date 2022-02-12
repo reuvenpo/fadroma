@@ -1,0 +1,3 @@
+(function() {var implementors = {};
+implementors["fadroma_ensemble"] = [{"text":"impl <a class=\"trait\" href=\"secret_cosmwasm_std/traits/trait.Querier.html\" title=\"trait secret_cosmwasm_std::traits::Querier\">Querier</a> for <a class=\"struct\" href=\"fadroma_ensemble/struct.EnsembleQuerier.html\" title=\"struct fadroma_ensemble::EnsembleQuerier\">EnsembleQuerier</a>","synthetic":false,"types":["fadroma_ensemble::querier::EnsembleQuerier"]}];
+if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

@@ -1,0 +1,1 @@
+initSidebarItems({"trait":[["Storable","Trait that will add storage options to your struct, at minimum, you will have to implement `key()` method that will let storage know where to save or from where to load your data."]]});
